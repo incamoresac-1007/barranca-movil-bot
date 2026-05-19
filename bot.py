@@ -301,6 +301,7 @@ Estoy aquí para ayudarte con lo que necesites.
 5️⃣ Ver tarifas
 6️⃣ Ayuda
 7️⃣ Reclamos y sugerencias 📋
+0️⃣ Salir
 
 O escribe tu consulta libremente 💬"""
 
