@@ -3,6 +3,7 @@ import json
 import time
 import asyncio
 import httpx
+from datetime import datetime
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
 from groq import Groq
@@ -2241,14 +2242,13 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             datos["enc_foto"] = True
         elif texto.lower() == "omitir" or texto:
             datos["enc_foto"] = False
+        else:
+            await enviar_mensaje(numero, "📸 Envía una foto o escribe *omitir*.")
+            return
+
         sesion["estado"] = S_ENCOMIENDA_URGENCIA
         await enviar_mensaje(numero,
-            "⏰ *¿Cuándo necesitas que llegue?*\n\n"
-            "1️⃣ Urgente — ahora mismo 🚀 _(+S/2)_\n"
-            "2️⃣ Hoy en el día 📅\n"
-            "3️⃣ Programar fecha y hora 🗓️")
-        await enviar_mensaje(numero,
-            f"✅ *{nombre_tam}*\n\n"
+            f"✅ *{datos.get('enc_tamano', 'Encomienda')}*\n\n"
             "⏰ *¿Cuándo necesitas que llegue?*\n\n"
             "1️⃣ Urgente — ahora mismo 🚀 _(+S/2)_\n"
             "2️⃣ Hoy en el día 📅\n"
