@@ -453,17 +453,56 @@ BARRANCA_LAT = -10.7511
 BARRANCA_LNG = -77.7625
 BARRANCA_RADIUS = 15000  # 15km radio
 
-async def buscar_lugares_barranca(texto: str) -> list:
-    """Places Autocomplete - busca lugares en Barranca como Waze.
-    Retorna lista de {nombre, place_id} max 4 sugerencias."""
-    # Agregar "Barranca" si no está en el texto para forzar zona
-    query = texto if "barranca" in texto.lower() else f"{texto} Barranca"
-    url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
+
+def _normalizar_geo(txt: str) -> str:
+    import unicodedata
+    txt = (txt or "").lower().strip()
+    txt = "".join(c for c in unicodedata.normalize("NFD", txt) if unicodedata.category(c) != "Mn")
+    return " ".join(txt.replace(".", " ").replace(",", " ").split())
+
+def _distancia_km_simple(lat1, lon1, lat2, lon2) -> float:
+    from math import radians, sin, cos, asin, sqrt
+    r = 6371.0
+    dlat = radians(float(lat2) - float(lat1))
+    dlon = radians(float(lon2) - float(lon1))
+    a = sin(dlat / 2) ** 2 + cos(radians(float(lat1))) * cos(radians(float(lat2))) * sin(dlon / 2) ** 2
+    return 2 * r * asin(sqrt(a))
+
+def _alias_barranca(texto: str) -> str:
+    n = _normalizar_geo(texto)
+    aliases = {
+        "calle lino": "El Lino Barranca Peru",
+        "calle nino": "El Lino Barranca Peru",
+        "el lino": "El Lino Barranca Peru",
+        "lino": "El Lino Barranca Peru",
+        "parque guadalupe": "Parque Virgen de Guadalupe Barranca Peru",
+        "parque virgen guadalupe": "Parque Virgen de Guadalupe Barranca Peru",
+        "parque virgen de guadalupe": "Parque Virgen de Guadalupe Barranca Peru",
+        "virgen de guadalupe": "Parque Virgen de Guadalupe Barranca Peru",
+    }
+    return aliases.get(n, texto)
+
+def _palabras_importantes_geo(texto: str) -> list[str]:
+    n = _normalizar_geo(texto)
+    stop = {
+        "calle", "jr", "jiron", "av", "avenida", "pasaje", "psje", "prolongacion",
+        "parque", "plaza", "mercado", "barranca", "peru", "el", "la", "los", "las",
+        "de", "del", "en", "por", "a", "una", "un"
+    }
+    return [w for w in n.split() if len(w) >= 3 and w not in stop]
+
+def _coincide_con_busqueda(texto_usuario: str, nombre_lugar: str) -> bool:
+    importantes = _palabras_importantes_geo(texto_usuario)
+    if not importantes:
+        return True
+    lugar_norm = _normalizar_geo(nombre_lugar)
+    return any(w in lugar_norm for w in importantes)
+
+async def _place_details_minimal(place_id: str) -> dict | None:
+    url = "https://maps.googleapis.com/maps/api/place/details/json"
     params = {
-        "input": query,
-        "location": f"{BARRANCA_LAT},{BARRANCA_LNG}",
-        "radius": 25000,
-        "strictbounds": "true",
+        "place_id": place_id,
+        "fields": "name,formatted_address,geometry",
         "language": "es",
         "key": GOOGLE_MAPS_KEY,
     }
@@ -471,35 +510,164 @@ async def buscar_lugares_barranca(texto: str) -> list:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(url, params=params)
             data = r.json()
-        predictions = data.get("predictions", [])
-        resultados = []
-        for p in predictions[:6]:  # revisar más para filtrar bien
-            nombre = p.get("description", "")
-            place_id = p.get("place_id", "")
-            if not place_id:
-                continue
-            # Filtrar: SOLO resultados de la ciudad de Barranca
-            # (excluir otras ciudades de la provincia: Pativilca, Paramonga, Supe, etc.)
-            nombre_lower = nombre.lower()
-            partes = nombre_lower.split(",")
-            primera = partes[0].strip()
-            segunda = partes[1].strip() if len(partes) > 1 else ""
-            OTRAS_CIUDADES = ["pativilca", "paramonga", "puerto supe", "supe pueblo",
-                              "supe", "huacho", "huaral", "lima region",
-                              "ventanilla", "los olivos", "san martin de porres",
-                              "callao", "miraflores", "san isidro", "surco"]
-            es_otra_ciudad = any(c in primera or c in segunda for c in OTRAS_CIUDADES)
-            # Aceptar si NO es otra ciudad (la API strictbounds ya garantiza cercanía a Barranca)
-            zona_valida = not es_otra_ciudad
-            if zona_valida:
-                resultados.append({"nombre": nombre, "place_id": place_id})
-            if len(resultados) == 4:
-                break
-        print(f"[AUTOCOMPLETE] '{texto}' -> {len(resultados)} resultados", flush=True)
-        return resultados
+        result = data.get("result") or {}
+        loc = result.get("geometry", {}).get("location", {})
+        if not loc.get("lat") or not loc.get("lng"):
+            return None
+        nombre = result.get("name") or ""
+        direccion = result.get("formatted_address") or nombre
+        display = direccion if nombre.lower() in direccion.lower() else f"{nombre}, {direccion}"
+        return {
+            "nombre": display,
+            "place_id": place_id,
+            "lat": float(loc["lat"]),
+            "lng": float(loc["lng"]),
+        }
+    except Exception as e:
+        print(f"[PLACE DETAILS MIN ERROR] {e}", flush=True)
+        return None
+
+
+def _normalizar_geo(txt: str) -> str:
+    import unicodedata
+    txt = (txt or "").lower().strip()
+    txt = "".join(c for c in unicodedata.normalize("NFD", txt) if unicodedata.category(c) != "Mn")
+    return " ".join(txt.replace(".", " ").replace(",", " ").split())
+
+def _distancia_km_simple(lat1, lon1, lat2, lon2) -> float:
+    from math import radians, sin, cos, asin, sqrt
+    r = 6371.0
+    dlat = radians(float(lat2) - float(lat1))
+    dlon = radians(float(lon2) - float(lon1))
+    a = sin(dlat / 2) ** 2 + cos(radians(float(lat1))) * cos(radians(float(lat2))) * sin(dlon / 2) ** 2
+    return 2 * r * asin(sqrt(a))
+
+def _alias_barranca(texto: str) -> str:
+    n = _normalizar_geo(texto)
+    aliases = {
+        "calle lino": "El Lino Barranca Peru",
+        "calle nino": "El Lino Barranca Peru",
+        "el lino": "El Lino Barranca Peru",
+        "lino": "El Lino Barranca Peru",
+        "parque guadalupe": "Parque Virgen de Guadalupe Barranca Peru",
+        "parque virgen guadalupe": "Parque Virgen de Guadalupe Barranca Peru",
+        "parque virgen de guadalupe": "Parque Virgen de Guadalupe Barranca Peru",
+        "virgen de guadalupe": "Parque Virgen de Guadalupe Barranca Peru",
+    }
+    return aliases.get(n, texto)
+
+def _palabras_importantes_geo(texto: str) -> list[str]:
+    n = _normalizar_geo(texto)
+    stop = {
+        "calle", "jr", "jiron", "av", "avenida", "pasaje", "psje", "prolongacion",
+        "parque", "plaza", "mercado", "barranca", "peru", "el", "la", "los", "las",
+        "de", "del", "en", "por", "a", "una", "un"
+    }
+    return [w for w in n.split() if len(w) >= 3 and w not in stop]
+
+def _coincide_con_busqueda(texto_usuario: str, nombre_lugar: str) -> bool:
+    importantes = _palabras_importantes_geo(texto_usuario)
+    if not importantes:
+        return True
+    lugar_norm = _normalizar_geo(nombre_lugar)
+    return any(w in lugar_norm for w in importantes)
+
+async def _place_details_minimal(place_id: str) -> dict | None:
+    url = "https://maps.googleapis.com/maps/api/place/details/json"
+    params = {
+        "place_id": place_id,
+        "fields": "name,formatted_address,geometry",
+        "language": "es",
+        "key": GOOGLE_MAPS_KEY,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, params=params)
+            data = r.json()
+        result = data.get("result") or {}
+        loc = result.get("geometry", {}).get("location", {})
+        if not loc.get("lat") or not loc.get("lng"):
+            return None
+        nombre = result.get("name") or ""
+        direccion = result.get("formatted_address") or nombre
+        display = direccion if nombre.lower() in direccion.lower() else f"{nombre}, {direccion}"
+        return {
+            "nombre": display,
+            "place_id": place_id,
+            "lat": float(loc["lat"]),
+            "lng": float(loc["lng"]),
+        }
+    except Exception as e:
+        print(f"[PLACE DETAILS MIN ERROR] {e}", flush=True)
+        return None
+
+async def buscar_lugares_barranca(texto: str) -> list:
+    texto_original = texto or ""
+    texto_alias = _alias_barranca(texto_original)
+    query = texto_alias if "barranca" in _normalizar_geo(texto_alias) else f"{texto_alias} Barranca Peru"
+
+    candidatos: list[dict] = []
+    vistos: set[str] = set()
+
+    async def agregar_place_id(place_id: str):
+        if not place_id or place_id in vistos:
+            return
+        vistos.add(place_id)
+        det = await _place_details_minimal(place_id)
+        if not det:
+            return
+        distancia = _distancia_km_simple(BARRANCA_LAT, BARRANCA_LNG, det["lat"], det["lng"])
+        if distancia > (BARRANCA_RADIUS / 1000):
+            print(f"[GEO FILTRO] fuera de Barranca: {det['nombre']} ({distancia:.1f} km)", flush=True)
+            return
+        if not _coincide_con_busqueda(texto_original, det["nombre"]):
+            print(f"[GEO FILTRO] no coincide con busqueda '{texto_original}': {det['nombre']}", flush=True)
+            return
+        det["distancia_barranca"] = distancia
+        candidatos.append(det)
+
+    try:
+        url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
+        params = {
+            "input": query,
+            "location": f"{BARRANCA_LAT},{BARRANCA_LNG}",
+            "radius": BARRANCA_RADIUS,
+            "strictbounds": "true",
+            "language": "es",
+            "components": "country:PE",
+            "key": GOOGLE_MAPS_KEY,
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, params=params)
+            data = r.json()
+        for p in data.get("predictions", [])[:8]:
+            await agregar_place_id(p.get("place_id", ""))
     except Exception as e:
         print(f"[AUTOCOMPLETE ERROR] {e}", flush=True)
-        return []
+
+    try:
+        url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+        params = {
+            "query": query,
+            "location": f"{BARRANCA_LAT},{BARRANCA_LNG}",
+            "radius": BARRANCA_RADIUS,
+            "language": "es",
+            "key": GOOGLE_MAPS_KEY,
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, params=params)
+            data = r.json()
+        for p in data.get("results", [])[:8]:
+            place_id = p.get("place_id", "")
+            if place_id and place_id not in vistos:
+                await agregar_place_id(place_id)
+    except Exception as e:
+        print(f"[TEXT SEARCH ERROR] {e}", flush=True)
+
+    candidatos.sort(key=lambda x: x.get("distancia_barranca", 999))
+    resultados = [{"nombre": c["nombre"], "place_id": c["place_id"]} for c in candidatos[:4]]
+    print(f"[GEO BARRANCA] '{texto_original}' -> {len(resultados)} resultado(s)", flush=True)
+    return resultados
 
 async def coords_de_place_id(place_id: str, nombre_sugerido: str = "") -> tuple:
     """Obtiene coordenadas de un place_id. Usa nombre_sugerido como display (evita Plus Codes)."""
@@ -529,28 +697,52 @@ async def coords_de_place_id(place_id: str, nombre_sugerido: str = "") -> tuple:
         print(f"[PLACE DETAILS ERROR] {e}", flush=True)
         return nombre_sugerido or "Dirección", f"{BARRANCA_LAT},{BARRANCA_LNG}"
 
+
+
 async def buscar_lugares_peru(texto: str) -> list:
-    """Places Autocomplete sin restricción de zona - para destinos de encomienda."""
+    texto_norm = _normalizar_geo(texto)
+    ciudades_externas = [
+        "lima", "miraflores", "san isidro", "surco", "callao", "huacho", "huaral",
+        "paramonga", "pativilca", "supe", "puerto supe", "chimbote", "trujillo"
+    ]
+    menciona_externa = any(c in texto_norm for c in ciudades_externas)
+
+    if not menciona_externa:
+        locales = await buscar_lugares_barranca(texto)
+        if locales:
+            return locales
+
+    query = texto if "peru" in texto_norm else f"{texto} Peru"
     url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
     params = {
-        "input": texto,
+        "input": query,
         "location": f"{BARRANCA_LAT},{BARRANCA_LNG}",
-        "radius": 500000,  # 500km - todo Peru
+        "radius": 500000,
         "language": "es",
         "components": "country:PE",
         "key": GOOGLE_MAPS_KEY,
     }
+
+    resultados = []
+    vistos = set()
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(url, params=params)
             data = r.json()
-        predictions = data.get("predictions", [])
-        resultados = []
-        for p in predictions[:4]:
-            nombre = p.get("description", "")
+        for p in data.get("predictions", [])[:8]:
             place_id = p.get("place_id", "")
-            if place_id:
-                resultados.append({"nombre": nombre, "place_id": place_id})
+            if not place_id or place_id in vistos:
+                continue
+            vistos.add(place_id)
+            det = await _place_details_minimal(place_id)
+            if not det:
+                continue
+            if not _coincide_con_busqueda(texto, det["nombre"]):
+                continue
+            resultados.append({"nombre": det["nombre"], "place_id": place_id})
+            if len(resultados) == 4:
+                break
+        print(f"[GEO PERU] '{texto}' -> {len(resultados)} resultado(s)", flush=True)
         return resultados
     except Exception as e:
         print(f"[GEO PERU ERROR] {e}", flush=True)
