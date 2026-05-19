@@ -109,6 +109,7 @@ S_ENCOMIENDA_DESC      = "ENCOMIENDA_DESC"
 S_ENCOMIENDA_BULTOS    = "ENCOMIENDA_BULTOS"
 S_ENCOMIENDA_TAMANO    = "ENCOMIENDA_TAMANO"
 S_ENCOMIENDA_FOTO      = "ENCOMIENDA_FOTO"
+S_ENCOMIENDA_CONFIRM_AUTO = "ENCOMIENDA_CONFIRM_AUTO"
 S_ENCOMIENDA_URGENCIA  = "ENCOMIENDA_URGENCIA"
 S_ENCOMIENDA_PROGRAMAR = "ENCOMIENDA_PROGRAMAR"
 S_ENCOMIENDA_ORIGEN    = "ENCOMIENDA_ORIGEN"
@@ -172,6 +173,7 @@ ESTADO_ANTERIOR = {
     S_ENCOMIENDA_BULTOS:    S_ENCOMIENDA_DESC,
     S_ENCOMIENDA_TAMANO:    S_ENCOMIENDA_BULTOS,
     S_ENCOMIENDA_FOTO:      S_ENCOMIENDA_TAMANO,
+    S_ENCOMIENDA_CONFIRM_AUTO: S_ENCOMIENDA_DESC,
     S_ENCOMIENDA_URGENCIA:  S_ENCOMIENDA_FOTO,
     S_ENCOMIENDA_PROGRAMAR: S_ENCOMIENDA_URGENCIA,
     S_ENCOMIENDA_ORIGEN:    S_ENCOMIENDA_URGENCIA,
@@ -210,6 +212,7 @@ PROMPT_VOLVER = {
     S_ENCOMIENDA_BULTOS:  "🔢 *¿Cuántos paquetes son?*\n_(Escribe el número)_",
     S_ENCOMIENDA_TAMANO:  "📐 *¿Cuál es el tamaño del paquete más grande?*\n1️⃣ Sobre/Documento\n2️⃣ Paquete pequeño\n3️⃣ Paquete mediano\n4️⃣ Paquete grande\n5️⃣ Carga pesada",
     S_ENCOMIENDA_FOTO:    "📸 *Envía una foto de tu encomienda*\nO escribe *omitir*",
+    S_ENCOMIENDA_CONFIRM_AUTO: "📦 *Confirma la encomienda detectada*\n1️⃣ Sí, continuar\n2️⃣ Cambiar cantidad o tamaño",
     S_ENCOMIENDA_URGENCIA:"⏰ *¿Cuándo necesitas que llegue?*\n1️⃣ Urgente 🚀\n2️⃣ Hoy en el día\n3️⃣ Programar",
     S_ENCOMIENDA_ORIGEN:  "📍 *¿Desde dónde recogemos la encomienda?*\n• Comparte tu ubicación 📌\n• O escribe la dirección",
     S_ENCOMIENDA_DESTINO: "🏁 *¿A qué dirección la enviamos?*\n• Comparte ubicación del destino 📌\n• O escribe la dirección",
@@ -2091,66 +2094,90 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         if len(texto) < 3:
             await enviar_mensaje(numero, "Por favor describe qué vas a enviar.")
             return
+
         datos["enc_descripcion"] = texto
 
-        # ── Auto-detectar cantidad y tamaño desde la descripción ──────────────
+        # Auto-detectar cantidad, tamaño y cuidado desde la descripcion
         import re as _re
         desc_l = texto.lower()
-        # Cantidad
+
         auto_paquetes = None
-        m_n = _re.search(r'\b(\d+)\s*(costal|costale|paquete|caja|bolsa|bolson|bulto|maleta|saco|mochila)s?\b', desc_l)
+        auto_tamano = None
+        peso_kg = None
+
+        # Cantidad explicita: "2 cajas", "3 bolsas", etc.
+        m_n = _re.search(
+            r'\b(\d+)\s*(costal|costales|paquete|paquetes|caja|cajas|bolsa|bolsas|bolson|bolsones|bulto|bultos|maleta|maletas|saco|sacos|silla|sillas|mesa|mesas|mueble|muebles)\b',
+            desc_l
+        )
         if m_n:
             n = int(m_n.group(1))
             auto_paquetes = min(n, 4) if n <= 3 else 4
-        elif _re.search(r'\bun(?:a)?\s+(costal|paquete|caja|bolsa|bulto|maleta|saco)\b', desc_l):
+
+        # Singular: "una silla", "un televisor", "una caja", etc.
+        if auto_paquetes is None and _re.search(r'\b(un|una)\s+\w+', desc_l):
             auto_paquetes = 1
-        # Tamaño
-        auto_tamano = None
-        m_kg = _re.search(r'(\d+[\.,]?\d*)\s*k[gi]', desc_l)
+
+        # Si no hay cantidad pero la descripcion parece un objeto unico, asumir 1 y confirmar
+        if auto_paquetes is None and any(w in desc_l for w in [
+            "silla", "mesa", "televisor", "tv", "monitor", "cpu", "impresora",
+            "mueble", "colchon", "bicicleta", "caja", "maleta", "mochila",
+            "costal", "bolsa", "paquete"
+        ]):
+            auto_paquetes = 1
+
+        # Peso: 20 kg, 20 kilos, 20 kilogramos
+        m_kg = _re.search(r'(\d+(?:[\.,]\d+)?)\s*(kg|kilo|kilos|kilogramo|kilogramos)\b', desc_l)
         if m_kg:
-            kg = float(m_kg.group(1).replace(',','.'))
-            if kg < 2:    auto_tamano = ("Paquete pequeño", 1, False)
-            elif kg <= 10: auto_tamano = ("Paquete mediano", 2, True)
-            elif kg <= 30: auto_tamano = ("Paquete grande",  3, True)
-            else:          auto_tamano = ("Carga pesada",    4, True)
-        if not auto_tamano:
-            if any(w in desc_l for w in ["documento","sobre","carta","hoja"]):
-                auto_tamano = ("Sobre/Documento", 1, False)
-            elif any(w in desc_l for w in ["pequeño","chico","liviano"]):
+            peso_kg = float(m_kg.group(1).replace(",", "."))
+            if peso_kg < 2:
                 auto_tamano = ("Paquete pequeño", 1, False)
-            elif any(w in desc_l for w in ["costal","maleta","bolson","saco","mochila","grande","caja","cerveza","cervezas","botella","botellas","bebida","bebidas","liquido","líquido"]):
+            elif peso_kg <= 10:
+                auto_tamano = ("Paquete mediano", 2, True)
+            elif peso_kg <= 30:
+                auto_tamano = ("Paquete grande", 3, True)
+            else:
+                auto_tamano = ("Carga pesada", 4, True)
+
+        # Tamaño por palabras clave si no hubo peso
+        if not auto_tamano:
+            if any(w in desc_l for w in ["documento", "documentos", "sobre", "carta", "hoja"]):
+                auto_tamano = ("Sobre/Documento", 1, False)
+            elif any(w in desc_l for w in ["pequeño", "pequeno", "chico", "liviano"]):
+                auto_tamano = ("Paquete pequeño", 1, False)
+            elif any(w in desc_l for w in ["silla", "mesa", "mueble", "colchon", "bicicleta", "televisor", "tv", "grande"]):
+                auto_tamano = ("Paquete grande", 3, True)
+            elif any(w in desc_l for w in ["costal", "maleta", "bolson", "saco", "mochila", "caja", "cerveza", "cervezas", "botella", "botellas", "bebida", "bebidas", "liquido", "líquido"]):
                 auto_tamano = ("Paquete mediano", 2, True)
 
         cuidado_extra = ""
         if any(w in desc_l for w in ["cerveza", "cervezas", "botella", "botellas", "bebida", "bebidas", "liquido", "líquido"]):
-            cuidado_extra = "AVISO: Requiere cuidado: fragil/liquido. Si son bebidas alcoholicas, debe entregar y recibir una persona mayor de edad.\n\n"
-
-        TAMANOS_TEXTO = {
-            "1": ("Sobre/Documento", 1, False),
-            "2": ("Paquete pequeño",  1, False),
-            "3": ("Paquete mediano",  2, True),
-            "4": ("Paquete grande",   3, True),
-            "5": ("Carga pesada",     4, True),
-        }
+            cuidado_extra = "AVISO: Requiere cuidado: fragil/liquido. Si son bebidas alcoholicas, debe entregar y recibir una persona mayor de edad.\n"
 
         if auto_paquetes and auto_tamano:
-            # Detectamos todo → saltar a foto
             nombre_tam, equiv_pas, req_conf = auto_tamano
             datos["enc_paquetes"] = auto_paquetes
             datos["enc_tamano"] = nombre_tam
             datos["enc_equiv_pasajeros"] = equiv_pas
             datos["enc_requiere_confirmacion"] = req_conf
             datos["enc_tarifa_base"] = None
-            sesion["estado"] = S_ENCOMIENDA_FOTO
+            datos["enc_cuidado_extra"] = cuidado_extra
+
+            peso_linea = f"⚖️ Peso aproximado: {peso_kg:g} kg\n" if peso_kg is not None else ""
+            sesion["estado"] = S_ENCOMIENDA_CONFIRM_AUTO
             await enviar_mensaje(numero,
-                f"📦 *{texto}*\n"
-                f"✅ *{auto_paquetes} paquete(s) — {nombre_tam}*\n\n"
-                f"{cuidado_extra}"
-                "📸 *Envía una foto de tu encomienda*\n"
-                "_(Para que el conductor sepa qué va a transportar)_\n\n"
-                "O escribe *omitir* si no tienes foto ahora.")
+                f"📦 *Detecté tu encomienda:*\n\n"
+                f"Producto: {texto}\n"
+                f"Cantidad: {auto_paquetes} paquete(s)\n"
+                f"Tamaño estimado: {nombre_tam}\n"
+                f"{peso_linea}"
+                f"{cuidado_extra}\n"
+                "¿Está correcto?\n\n"
+                "1️⃣ Sí, continuar\n"
+                "2️⃣ Cambiar cantidad o tamaño\n"
+                "0️⃣ Volver atrás\n"
+                "*menu* Ir al inicio")
         elif auto_paquetes:
-            # Solo cantidad detectada → saltar bultos, preguntar tamaño
             datos["enc_paquetes"] = auto_paquetes
             sesion["estado"] = S_ENCOMIENDA_TAMANO
             await enviar_mensaje(numero,
@@ -2160,9 +2187,10 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "2️⃣ Paquete pequeño _(hasta 2kg)_ — S/5\n"
                 "3️⃣ Paquete mediano _(2-10kg)_ — S/8\n"
                 "4️⃣ Paquete grande _(10-30kg)_ — S/12\n"
-                "5️⃣ Carga pesada _(+30kg)_ — A coordinar")
+                "5️⃣ Carga pesada _(+30kg)_ — A coordinar\n\n"
+                "0️⃣ Volver atrás\n"
+                "*menu* Ir al inicio")
         elif auto_tamano:
-            # Solo tamaño detectado → saltar a tamaño, preguntar cantidad
             nombre_tam, equiv_pas, req_conf = auto_tamano
             datos["enc_tamano"] = nombre_tam
             datos["enc_equiv_pasajeros"] = equiv_pas
@@ -2175,9 +2203,10 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "1️⃣ Solo 1 paquete\n"
                 "2️⃣ 2 paquetes\n"
                 "3️⃣ 3 paquetes\n"
-                "4️⃣ 4 o más paquetes")
+                "4️⃣ 4 o más paquetes\n\n"
+                "0️⃣ Volver atrás\n"
+                "*menu* Ir al inicio")
         else:
-            # No detectamos nada → flujo normal
             sesion["estado"] = S_ENCOMIENDA_BULTOS
             await enviar_mensaje(numero,
                 f"📦 *{texto}*\n\n"
@@ -2185,7 +2214,41 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "1️⃣ Solo 1 paquete\n"
                 "2️⃣ 2 paquetes\n"
                 "3️⃣ 3 paquetes\n"
-                "4️⃣ 4 o más paquetes")
+                "4️⃣ 4 o más paquetes\n\n"
+                "0️⃣ Volver atrás\n"
+                "*menu* Ir al inicio")
+
+    elif estado == S_ENCOMIENDA_CONFIRM_AUTO:
+        if texto == "1":
+            sesion["estado"] = S_ENCOMIENDA_FOTO
+            await enviar_mensaje(numero,
+                f"✅ *{datos.get('enc_paquetes', 1)} paquete(s) — {datos.get('enc_tamano', 'Encomienda')}*\n\n"
+                f"{datos.get('enc_cuidado_extra', '')}"
+                "📸 *Envía una foto de tu encomienda*\n"
+                "_(Para que el conductor sepa qué va a transportar)_\n\n"
+                "O escribe *omitir* si no tienes foto ahora.\n\n"
+                "0️⃣ Volver atrás\n"
+                "*menu* Ir al inicio")
+        elif texto == "2":
+            for campo in ["enc_paquetes", "enc_tamano", "enc_equiv_pasajeros", "enc_requiere_confirmacion", "enc_tarifa_base", "enc_cuidado_extra"]:
+                datos.pop(campo, None)
+            sesion["estado"] = S_ENCOMIENDA_BULTOS
+            await enviar_mensaje(numero,
+                "Perfecto, lo cambiamos manualmente.\n\n"
+                "🔢 *¿Cuántos paquetes son?*\n\n"
+                "1️⃣ Solo 1 paquete\n"
+                "2️⃣ 2 paquetes\n"
+                "3️⃣ 3 paquetes\n"
+                "4️⃣ 4 o más paquetes\n\n"
+                "0️⃣ Volver atrás\n"
+                "*menu* Ir al inicio")
+        else:
+            await enviar_mensaje(numero,
+                "Responde una opción:\n\n"
+                "1️⃣ Sí, continuar\n"
+                "2️⃣ Cambiar cantidad o tamaño\n"
+                "0️⃣ Volver atrás\n"
+                "*menu* Ir al inicio")
 
     elif estado == S_ENCOMIENDA_BULTOS:
         paquetes_map = {"1": 1, "2": 2, "3": 3, "4": 4}
@@ -2246,7 +2309,9 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             "⏰ *¿Cuándo necesitas que llegue?*\n\n"
             "1️⃣ Urgente — ahora mismo 🚀 _(+S/2)_\n"
             "2️⃣ Hoy en el día 📅\n"
-            "3️⃣ Programar fecha y hora 🗓️")
+            "3️⃣ Programar fecha y hora 🗓️\n\n"
+            "0️⃣ Volver atrás\n"
+            "*menu* Ir al inicio")
 
     elif estado == S_ENCOMIENDA_URGENCIA:
         if texto == "1":
