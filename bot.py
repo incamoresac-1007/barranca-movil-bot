@@ -221,7 +221,7 @@ PROMPT_VOLVER = {
     S_TURISMO_CUANDO:     "📅 *¿Para cuándo es el tour?*\n1️⃣ Hoy\n2️⃣ Mañana\n3️⃣ Otra fecha",
     S_TURISMO_RECOJO:     "📍 *¿Desde dónde los recogemos?*\n• Comparte tu ubicación 📌\n• O escribe la dirección",
     S_TURISMO_PAGO:       "💳 *¿Cómo pagas?*\n1️⃣ Efectivo\n2️⃣ Yape",
-    S_TURISMO_PASAJEROS:  "🔒 *Registro de pasajeros*\n¿Cuántos van? Escribe los datos o *omitir*",
+    S_TURISMO_PASAJEROS:  "🔒 *Registro de pasajeros*\n\n¿Cuál es tu número de DNI? _(7-8 dígitos)_\nO escribe *omitir* para saltarlo.",
 }
 
 sesiones: dict[str, dict] = {}
@@ -374,7 +374,7 @@ async def enviar_mensaje(to: str, texto: str):
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": texto}}
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=5) as client:
         r = await client.post(url, headers=headers, json=payload)
         print(f"[WA] {r.status_code}", flush=True)
 
@@ -388,7 +388,7 @@ async def reenviar_imagen(to: str, media_id: str):
         "type": "image",
         "image": {"id": media_id, "caption": "📸 Foto de la encomienda"}
     }
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=5) as client:
         r = await client.post(url, headers=headers, json=payload)
         print(f"[IMG] {r.status_code}", flush=True)
 
@@ -428,7 +428,7 @@ async def registrar_turismo_sheets(datos_turismo: dict):
 async def coords_a_direccion(lat, lng) -> str:
     url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lng}&key={GOOGLE_MAPS_KEY}&language=es"
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=4) as client:
             r = await client.get(url)
             data = r.json()
             if data.get("results"):
@@ -619,12 +619,16 @@ async def respuesta_ia(numero: str, texto: str) -> str:
     historial = historial_ia[numero][-8:]
     def _groq():
         return groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=[{"role": "system", "content": SYSTEM_PROMPT_IA}] + historial,
-            max_tokens=250, temperature=0.7
+            max_tokens=150, temperature=0.5
         )
-    completion = await asyncio.to_thread(_groq)
-    resp = completion.choices[0].message.content
+    try:
+        completion = await asyncio.wait_for(asyncio.to_thread(_groq), timeout=4.0)
+        resp = completion.choices[0].message.content
+    except (asyncio.TimeoutError, Exception):
+        resp = ("Lo siento, no entendí tu consulta. ¿Necesitas taxi, colectivo, encomienda o turismo?\n\n"
+                "Escribe *menu* para ver las opciones.")
     historial_ia[numero].append({"role": "assistant", "content": resp})
     return resp
 
@@ -2663,8 +2667,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             return
         elif paso == "dni":
             dni = txt_norm.replace(" ", "")
-            if not dni.isdigit() or len(dni) < 6:
-                await enviar_mensaje(numero, "❌ DNI inválido. Ingresa solo números _(mínimo 6 dígitos)_:")
+            if not dni.isdigit() or not (7 <= len(dni) <= 9):
+                await enviar_mensaje(numero, "❌ DNI inválido. Debe tener 7 u 8 dígitos, solo números:")
                 return
             nombre_temp = datos.get("_turismo_nombre_temp", "")
             lista.append({"nombre": nombre_temp, "dni": dni})
