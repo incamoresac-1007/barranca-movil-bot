@@ -285,9 +285,10 @@ SYSTEM_PROMPT_IA = """Eres el asistente de Barranca Móvil, servicio de taxis, e
 Servicios: TAXI urbano (S/3+S/1.20/km), interdistrital fijo, ENCOMIENDA local, TURISMO (Paramonga S/35, Caral S/60, Playas S/25, Huacho S/50).
 Pago: Efectivo o Yape. Responde en español, amigable, máximo 3 oraciones."""
 
-MSG_BIENVENIDA = """🚖 *Bienvenido a Barranca Móvil* 🌊
+MSG_BIENVENIDA = """👋 ¡Hola! Soy *Elizabeth*, tu asistente de *Barranca Móvil* 🚖🌊
 
-¿En qué podemos ayudarte?
+Estoy aquí para ayudarte con lo que necesites.
+¿En qué te puedo ayudar hoy?
 
 1️⃣ Solicitar taxi
 2️⃣ Colectivo puerta a puerta 🚌
@@ -326,13 +327,14 @@ _(2+ asientos: descuento en recojo S/0.50 c/u)_
 
 Escribe *menu* para volver."""
 
-MSG_AYUDA = """❓ *Ayuda Barranca Móvil*
+MSG_AYUDA = """❓ *Hola, soy Elizabeth — ¿en qué te ayudo?*
 
-• Escribe *menu* para reiniciar
+• Escribe *menu* para volver al inicio
 • *1* Taxi | *2* Colectivo | *3* Encomienda | *4* Turismo
 • Escribe *mis viajes* para ver tu historial
-• Escribe *calificaciones* para ver ratings (operador)
-• Soporte: *+51 983 469 309*"""
+• Soporte directo: *+51 983 469 309*
+
+_Estoy aquí para lo que necesites_ 🚖"""
 
 MSG_TURISMO_OPCIONES = """🗺️ *Tours desde Barranca*
 _(Precios referenciales, sujetos a negociación)_
