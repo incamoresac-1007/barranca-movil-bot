@@ -1221,6 +1221,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     sesion = sesiones[numero]
     estado = sesion["estado"]
+    texto = (contenido.get("body", "") if isinstance(contenido, dict) else "").strip()
+
     if es_comando_cancelar(texto):
         await cancelar_solicitud_actual(numero)
         return
