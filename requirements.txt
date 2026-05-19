@@ -1,5 +1,6 @@
-fastapi 
-uvicorn 
-httpx 
-python-dotenv 
-groq 
+fastapi==0.111.0
+fastapi-cli==0.0.24
+groq==0.9.0
+httpx==0.27.0
+python-dotenv==1.0.1
+uvicorn==0.29.0
