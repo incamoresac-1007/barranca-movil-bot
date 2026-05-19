@@ -1,9 +1,9 @@
 import os
 import json
 import time
+from datetime import datetime
 import asyncio
 import httpx
-from datetime import datetime
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
 from groq import Groq
@@ -230,6 +230,7 @@ historial_ia: dict[str, list] = {}
 calificaciones: list[dict] = []  # historial de ratings
 tickets: list[dict] = []          # tickets de reclamos/sugerencias
 _ticket_counter: int = 0          # contador de tickets
+mensajes_procesados: set[str] = set()  # idempotencia básica de webhooks WhatsApp
 viajes_programados: list[dict] = []  # viajes agendados
 viajes_recurrentes: dict[str, dict] = {}  # viajes recurrentes por número
 
@@ -372,9 +373,12 @@ async def enviar_mensaje(to: str, texto: str):
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": texto}}
-    async with httpx.AsyncClient(timeout=5) as client:
+    async with httpx.AsyncClient(timeout=10) as client:
         r = await client.post(url, headers=headers, json=payload)
-        print(f"[WA] {r.status_code}", flush=True)
+        if r.status_code >= 400:
+            print(f"[WA ERROR] {r.status_code} {r.text}", flush=True)
+        else:
+            print(f"[WA] {r.status_code}", flush=True)
 
 async def reenviar_imagen(to: str, media_id: str):
     """Reenvía una imagen recibida a otro número."""
@@ -386,9 +390,12 @@ async def reenviar_imagen(to: str, media_id: str):
         "type": "image",
         "image": {"id": media_id, "caption": "📸 Foto de la encomienda"}
     }
-    async with httpx.AsyncClient(timeout=5) as client:
+    async with httpx.AsyncClient(timeout=10) as client:
         r = await client.post(url, headers=headers, json=payload)
-        print(f"[IMG] {r.status_code}", flush=True)
+        if r.status_code >= 400:
+            print(f"[IMG ERROR] {r.status_code} {r.text}", flush=True)
+        else:
+            print(f"[IMG] {r.status_code}", flush=True)
 
 async def registrar_turismo_sheets(datos_turismo: dict):
     """Registra servicio turismo en Google Sheets via Apps Script webhook."""
@@ -1892,7 +1899,6 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 msg_ok = "🎉 *¡Solicitud enviada!*\n\nEstamos buscando conductor.\nTe contactarán pronto.\n\n━━━━━━━━━━━━━━━━\n1️⃣ Nuevo servicio\n0️⃣ Salir"
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
             await enviar_mensaje(numero, msg_ok)
-            asyncio.create_task(programar_calificacion(numero, datos_servicio))
         elif texto == "2":
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
             await enviar_mensaje(numero, "❌ Cancelado.\n\nEscribe *1* cuando quieras solicitar otro servicio.\n0️⃣ Salir")
@@ -2059,38 +2065,21 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     elif estado == S_COLECTIVO_CONFIRMAR:
         if texto == "1":
-            # Notificar conductores
-            if GRUPO_CONDUCTORES:
-                msg_cond = (
-                    f"🚌 *COLECTIVO SOLICITADO*\n\n"
-                    f"👤 {datos['nombre']} | 📱 +{numero}\n"
-                    f"{datos['colectivo_emoji']} {datos['colectivo_ruta']}\n"
-                    f"🕐 {datos['colectivo_horario']}\n"
-                    f"👥 {datos['colectivo_asientos']} asiento(s)\n"
-                    f"📍 {datos['colectivo_recojo']}\n"
-                    f"💰 S/{datos['colectivo_total']:.2f} | 💳 {datos['colectivo_pago']}\n\n"
-                    f"Responde *ACEPTO COLECTIVO* para tomar el servicio"
-                )
-                await enviar_mensaje(GRUPO_CONDUCTORES, msg_cond)
+            await notificar_conductores(sesion, numero, "COLECTIVO")
             guardar_viaje(numero, {
                 "destino_texto": datos.get("colectivo_ruta"),
                 "tarifa": datos.get("colectivo_total"),
                 "pago": datos.get("colectivo_pago")
             }, "colectivo")
-            datos_servicio = {
-                "tipo": "colectivo",
-                "destino": datos.get("colectivo_ruta"),
-                "conductor": "Pendiente"
-            }
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
             await enviar_mensaje(numero,
                 f"🎉 *¡Colectivo reservado!*\n\n"
                 f"Salida programada: *{datos.get('colectivo_horario')}*\n"
-                f"El conductor te contactará para confirmar el recojo.\n\n"
+                f"Estamos buscando conductor. Te contactarán pronto.\n\n"
                 f"📌 *Recuerda:* el colectivo sale cuando se completan "
                 f"los {COLECTIVO_MAX_ASIENTOS} asientos.\n\n"
                 f"━━━━━━━━━━━━━━━━\n1️⃣ Nuevo servicio\n0️⃣ Salir")
-            asyncio.create_task(programar_calificacion(numero, datos_servicio))
+
         elif texto == "2":
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
             await enviar_mensaje(numero, "❌ Cancelado.\n\nEscribe *1* cuando quieras solicitar otro servicio.\n0️⃣ Salir")
@@ -2489,7 +2478,6 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
             await enviar_mensaje(numero,
                 "🎉 *¡Encomienda registrada!*\n\nUn conductor te contactará pronto.\n\n━━━━━━━━━━━━━━━━\n1️⃣ Nuevo servicio\n0️⃣ Salir")
-            asyncio.create_task(programar_calificacion(numero, datos_servicio))
         elif texto == "2":
             sesiones.pop(numero, None)
             historial_ia.pop(numero, None)
@@ -2869,7 +2857,6 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "🎉 *¡Tour reservado!*\n\n"
                 "Un conductor te contactará pronto para confirmar el precio final y los detalles.\n\n"
                 "━━━━━━━━━━━━━━━━\n1️⃣ Nuevo servicio\n0️⃣ Salir")
-            asyncio.create_task(programar_calificacion(numero, datos_servicio))
         elif texto == "2":
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
             await enviar_mensaje(numero, "❌ Cancelado.\n\n━━━━━━━━━━━━━━━━\n1️⃣ Nuevo servicio\n0️⃣ Salir")
@@ -2888,30 +2875,47 @@ async def verificar(request: Request):
 async def recibir(request: Request):
     try:
         body = await request.json()
-        messages = body.get("entry",[{}])[0].get("changes",[{}])[0].get("value",{}).get("messages",[])
+        messages = body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("messages", [])
         if not messages:
             return {"status": "ok"}
-        msg    = messages[0]
-        numero = msg["from"]
-        tipo   = msg.get("type")
 
-        msg_age = time.time() - int(msg.get("timestamp", 0))
-        if msg_age > 300:
-            print(f"[SKIP] mensaje viejo {int(msg_age)}s - ignorando", flush=True)
-            return {"status": "ok"}
+        for msg in messages:
+            msg_id = msg.get("id")
+            if msg_id and msg_id in mensajes_procesados:
+                print(f"[SKIP] mensaje duplicado {msg_id}", flush=True)
+                continue
+            if msg_id:
+                mensajes_procesados.add(msg_id)
+                if len(mensajes_procesados) > 5000:
+                    mensajes_procesados.clear()
 
-        if tipo == "text":
-            await procesar(numero, "text", msg.get("text", {}))
-        elif tipo == "location":
-            await procesar(numero, "location", msg.get("location", {}))
-        elif tipo == "image":
-            await procesar(numero, "image", msg.get("image", {}))
-        else:
-            await enviar_mensaje(numero, "Solo entiendo texto, ubicaciones e imágenes 😊\n\nEscribe *menu* para comenzar.")
+            numero = msg.get("from")
+            tipo = msg.get("type")
+            if not numero:
+                continue
+
+            try:
+                msg_age = time.time() - int(msg.get("timestamp", 0))
+            except Exception:
+                msg_age = 0
+            if msg_age > 300:
+                print(f"[SKIP] mensaje viejo {int(msg_age)}s - ignorando", flush=True)
+                continue
+
+            if tipo == "text":
+                await procesar(numero, "text", msg.get("text", {}))
+            elif tipo == "location":
+                await procesar(numero, "location", msg.get("location", {}))
+            elif tipo == "image":
+                await procesar(numero, "image", msg.get("image", {}))
+            else:
+                await enviar_mensaje(numero, "Solo entiendo texto, ubicaciones e imágenes 😊\n\nEscribe *menu* para comenzar.")
 
         return {"status": "ok"}
     except Exception as e:
+        import traceback
         print(f"[ERROR] {e}", flush=True)
+        print(traceback.format_exc(), flush=True)
         return {"status": "error"}
 
 @app.get("/tickets")
