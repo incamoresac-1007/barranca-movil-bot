@@ -1858,10 +1858,17 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     elif estado == S_COLECTIVO_RECOJO:
         if lat and lng:
-            datos["colectivo_recojo"] = await coords_a_direccion(lat, lng)
+            direccion_gps = await coords_a_direccion(lat, lng)
+            if not direccion_gps:
+                await enviar_mensaje(numero,
+                    "📌 Recibí tu ubicación pero no pude identificar la dirección.\n\n"
+                    "✍️ *Escribe el nombre del lugar o dirección:*\n"
+                    "_(Ej: Parque Guadalupe, Jr. Lima 234)_")
+                return
+            datos["colectivo_recojo"] = direccion_gps
             sesion["estado"] = S_COLECTIVO_PAGO
             await enviar_mensaje(numero,
-                f"✅ Recojo: *{datos['colectivo_recojo']}*\n\n"
+                f"✅ Recojo: *{direccion_gps}*\n\n"
                 "💳 *¿Cómo pagas?*\n1️⃣ Efectivo\n2️⃣ Yape" + NAV)
         elif texto:
             # Sugerencia elegida de lista previa → DIRECTO a pago
