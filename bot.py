@@ -298,9 +298,6 @@ Estoy aquí para ayudarte con lo que necesites.
 2️⃣ Colectivo puerta a puerta 🚌
 3️⃣ Envío de encomienda 📦
 4️⃣ Ruta turística 🗺️
-5️⃣ Ver tarifas
-6️⃣ Ayuda
-7️⃣ Reclamos y sugerencias 📋
 0️⃣ Salir
 
 O escribe tu consulta libremente 💬"""
@@ -1390,19 +1387,13 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             sesion["estado"] = S_NOMBRE
             datos["servicio"] = "TURISMO"
             await enviar_mensaje(numero, "🗺️ ¡Genial! ¿Cuál es tu nombre?")
-        elif texto == "5":
-            await enviar_mensaje(numero, MSG_TARIFAS)
-        elif texto == "6":
-            await enviar_mensaje(numero, MSG_AYUDA)
-        elif texto == "7":
-            sesion["estado"] = S_RECLAMO_TIPO
+        elif texto == "0":
+            sesiones.pop(numero, None)
+            historial_ia.pop(numero, None)
             await enviar_mensaje(numero,
-                "📋 *Reclamos y sugerencias*\n\n"
-                "¿Qué deseas reportar?\n\n"
-                "1️⃣ Reclamo — tuve un problema con el servicio\n"
-                "2️⃣ Sugerencia — quiero proponer una mejora\n"
-                "3️⃣ Consulta — tengo una pregunta\n\n"
-                "_(O escribe *menu* para volver)_")
+                "👋 *¡Hasta pronto!*\n\n"
+                "Cuando necesites un servicio escribe *hola* o *menu*.\n\n"
+                "_Barranca Móvil — siempre a tu servicio_ 🚖")
         else:
             resp = await respuesta_ia(numero, texto)
             datos["ultima_consulta"] = texto
