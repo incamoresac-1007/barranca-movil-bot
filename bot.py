@@ -498,6 +498,51 @@ def _coincide_con_busqueda(texto_usuario: str, nombre_lugar: str) -> bool:
     lugar_norm = _normalizar_geo(nombre_lugar)
     return any(w in lugar_norm for w in importantes)
 
+
+def _limpiar_display_barranca(nombre: str) -> str:
+    import re
+
+    s = (nombre or "").strip()
+    if not s:
+        return "Barranca"
+
+    # Quitar Plus Codes: 762X+C99, 4X5P+22, etc.
+    s = re.sub(r"\b[23456789CFGHJMPQRVWX]{3,}\+[23456789CFGHJMPQRVWX0-9]{2,}\b", "", s, flags=re.I)
+
+    # Quitar codigos postales tipo 15169
+    s = re.sub(r"\b15\d{3}\b", "", s)
+
+    # Quitar pais
+    s = re.sub(r"\bPer[uú]\b", "", s, flags=re.I)
+
+    partes = [p.strip(" -") for p in s.split(",") if p.strip(" -")]
+    partes_limpias = []
+
+    for p in partes:
+        pn = _normalizar_geo(p)
+        if not pn:
+            continue
+        if pn in {"peru", "barranca province", "provincia de barranca"}:
+            continue
+        if "+" in p:
+            continue
+        partes_limpias.append(p)
+
+    if not partes_limpias:
+        return "Barranca"
+
+    primero = partes_limpias[0]
+    unido_norm = _normalizar_geo(", ".join(partes_limpias))
+
+    if "barranca" not in unido_norm:
+        return f"{primero}, Barranca"
+
+    if _normalizar_geo(primero) == "barranca":
+        return "Barranca"
+
+    return f"{primero}, Barranca"
+
+
 async def _place_details_minimal(place_id: str) -> dict | None:
     url = "https://maps.googleapis.com/maps/api/place/details/json"
     params = {
@@ -517,6 +562,7 @@ async def _place_details_minimal(place_id: str) -> dict | None:
         nombre = result.get("name") or ""
         direccion = result.get("formatted_address") or nombre
         display = direccion if nombre.lower() in direccion.lower() else f"{nombre}, {direccion}"
+        display = _limpiar_display_barranca(display)
         return {
             "nombre": display,
             "place_id": place_id,
@@ -670,11 +716,11 @@ async def buscar_lugares_barranca(texto: str) -> list:
     return resultados
 
 async def coords_de_place_id(place_id: str, nombre_sugerido: str = "") -> tuple:
-    """Obtiene coordenadas de un place_id. Usa nombre_sugerido como display (evita Plus Codes)."""
+    # Obtiene coordenadas de un place_id y devuelve nombre legible sin codigos raros.
     url = "https://maps.googleapis.com/maps/api/place/details/json"
     params = {
         "place_id": place_id,
-        "fields": "geometry",
+        "fields": "name,formatted_address,geometry",
         "language": "es",
         "key": GOOGLE_MAPS_KEY,
     }
@@ -682,22 +728,22 @@ async def coords_de_place_id(place_id: str, nombre_sugerido: str = "") -> tuple:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(url, params=params)
             data = r.json()
+
         result = data.get("result", {})
         loc = result.get("geometry", {}).get("location", {})
         lat = loc.get("lat", BARRANCA_LAT)
         lng = loc.get("lng", BARRANCA_LNG)
-        # Usar nombre de la sugerencia (ya es legible), no formatted_address que puede ser Plus Code
-        if nombre_sugerido:
-            partes = nombre_sugerido.split(",")
-            direccion = ", ".join(partes[:2]) if len(partes) > 1 else nombre_sugerido
-        else:
-            direccion = "Dirección Barranca"
+
+        nombre = result.get("name") or ""
+        direccion_api = result.get("formatted_address") or ""
+        base = nombre_sugerido or (f"{nombre}, {direccion_api}" if nombre else direccion_api)
+        direccion = _limpiar_display_barranca(base)
+
         return direccion, f"{lat},{lng}"
     except Exception as e:
         print(f"[PLACE DETAILS ERROR] {e}", flush=True)
-        return nombre_sugerido or "Dirección", f"{BARRANCA_LAT},{BARRANCA_LNG}"
-
-
+        direccion = _limpiar_display_barranca(nombre_sugerido or "Barranca")
+        return direccion, f"{BARRANCA_LAT},{BARRANCA_LNG}"
 
 async def buscar_lugares_peru(texto: str) -> list:
     texto_norm = _normalizar_geo(texto)
