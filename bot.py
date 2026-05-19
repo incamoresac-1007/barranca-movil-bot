@@ -2102,7 +2102,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         if m_n:
             n = int(m_n.group(1))
             auto_paquetes = min(n, 4) if n <= 3 else 4
-        elif _re.search(r'\bun\s+(costal|paquete|caja|bolsa|bulto|maleta|saco)\b', desc_l):
+        elif _re.search(r'\bun(?:a)?\s+(costal|paquete|caja|bolsa|bulto|maleta|saco)\b', desc_l):
             auto_paquetes = 1
         # Tamaño
         auto_tamano = None
@@ -2118,8 +2118,12 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 auto_tamano = ("Sobre/Documento", 1, False)
             elif any(w in desc_l for w in ["pequeño","chico","liviano"]):
                 auto_tamano = ("Paquete pequeño", 1, False)
-            elif any(w in desc_l for w in ["costal","maleta","bolson","saco","mochila","grande"]):
+            elif any(w in desc_l for w in ["costal","maleta","bolson","saco","mochila","grande","caja","cerveza","cervezas","botella","botellas","bebida","bebidas","liquido","líquido"]):
                 auto_tamano = ("Paquete mediano", 2, True)
+
+        cuidado_extra = ""
+        if any(w in desc_l for w in ["cerveza", "cervezas", "botella", "botellas", "bebida", "bebidas", "liquido", "líquido"]):
+            cuidado_extra = "AVISO: Requiere cuidado: fragil/liquido. Si son bebidas alcoholicas, debe entregar y recibir una persona mayor de edad.\n\n"
 
         TAMANOS_TEXTO = {
             "1": ("Sobre/Documento", 1, False),
@@ -2141,6 +2145,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero,
                 f"📦 *{texto}*\n"
                 f"✅ *{auto_paquetes} paquete(s) — {nombre_tam}*\n\n"
+                f"{cuidado_extra}"
                 "📸 *Envía una foto de tu encomienda*\n"
                 "_(Para que el conductor sepa qué va a transportar)_\n\n"
                 "O escribe *omitir* si no tienes foto ahora.")
