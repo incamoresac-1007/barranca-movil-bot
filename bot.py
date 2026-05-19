@@ -467,10 +467,19 @@ async def buscar_lugares_barranca(texto: str) -> list:
             place_id = p.get("place_id", "")
             if not place_id:
                 continue
-            # Filtrar resultados que no sean de la zona Barranca
+            # Filtrar: SOLO resultados de la ciudad de Barranca
+            # (excluir otras ciudades de la provincia: Pativilca, Paramonga, Supe, etc.)
             nombre_lower = nombre.lower()
-            # Para recojo: SOLO resultados de Barranca (no Paramonga ni otras ciudades)
-            zona_valida = "barranca" in nombre_lower
+            partes = nombre_lower.split(",")
+            primera = partes[0].strip()
+            segunda = partes[1].strip() if len(partes) > 1 else ""
+            OTRAS_CIUDADES = ["pativilca", "paramonga", "puerto supe", "supe pueblo",
+                              "supe", "huacho", "huaral", "lima region",
+                              "ventanilla", "los olivos", "san martin de porres",
+                              "callao", "miraflores", "san isidro", "surco"]
+            es_otra_ciudad = any(c in primera or c in segunda for c in OTRAS_CIUDADES)
+            # Aceptar si NO es otra ciudad (la API strictbounds ya garantiza cercanía a Barranca)
+            zona_valida = not es_otra_ciudad
             if zona_valida:
                 resultados.append({"nombre": nombre, "place_id": place_id})
             if len(resultados) == 4:
@@ -2093,14 +2102,95 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero, "Por favor describe qué vas a enviar.")
             return
         datos["enc_descripcion"] = texto
-        sesion["estado"] = S_ENCOMIENDA_BULTOS
-        await enviar_mensaje(numero,
-            f"📦 *{texto}*\n\n"
-            "🔢 *¿Cuántos paquetes vas a enviar?*\n\n"
-            "1️⃣ Solo 1 paquete\n"
-            "2️⃣ 2 paquetes\n"
-            "3️⃣ 3 paquetes\n"
-            "4️⃣ 4 o más paquetes")
+
+        # ── Auto-detectar cantidad y tamaño desde la descripción ──────────────
+        import re as _re
+        desc_l = texto.lower()
+        # Cantidad
+        auto_paquetes = None
+        m_n = _re.search(r'\b(\d+)\s*(costal|costale|paquete|caja|bolsa|bolson|bulto|maleta|saco|mochila)s?\b', desc_l)
+        if m_n:
+            n = int(m_n.group(1))
+            auto_paquetes = min(n, 4) if n <= 3 else 4
+        elif _re.search(r'\bun\s+(costal|paquete|caja|bolsa|bulto|maleta|saco)\b', desc_l):
+            auto_paquetes = 1
+        # Tamaño
+        auto_tamano = None
+        m_kg = _re.search(r'(\d+[\.,]?\d*)\s*k[gi]', desc_l)
+        if m_kg:
+            kg = float(m_kg.group(1).replace(',','.'))
+            if kg < 2:    auto_tamano = ("Paquete pequeño", 1, False)
+            elif kg <= 10: auto_tamano = ("Paquete mediano", 2, True)
+            elif kg <= 30: auto_tamano = ("Paquete grande",  3, True)
+            else:          auto_tamano = ("Carga pesada",    4, True)
+        if not auto_tamano:
+            if any(w in desc_l for w in ["documento","sobre","carta","hoja"]):
+                auto_tamano = ("Sobre/Documento", 1, False)
+            elif any(w in desc_l for w in ["pequeño","chico","liviano"]):
+                auto_tamano = ("Paquete pequeño", 1, False)
+            elif any(w in desc_l for w in ["costal","maleta","bolson","saco","mochila","grande"]):
+                auto_tamano = ("Paquete mediano", 2, True)
+
+        TAMANOS_TEXTO = {
+            "1": ("Sobre/Documento", 1, False),
+            "2": ("Paquete pequeño",  1, False),
+            "3": ("Paquete mediano",  2, True),
+            "4": ("Paquete grande",   3, True),
+            "5": ("Carga pesada",     4, True),
+        }
+
+        if auto_paquetes and auto_tamano:
+            # Detectamos todo → saltar a foto
+            nombre_tam, equiv_pas, req_conf = auto_tamano
+            datos["enc_paquetes"] = auto_paquetes
+            datos["enc_tamano"] = nombre_tam
+            datos["enc_equiv_pasajeros"] = equiv_pas
+            datos["enc_requiere_confirmacion"] = req_conf
+            datos["enc_tarifa_base"] = None
+            sesion["estado"] = S_ENCOMIENDA_FOTO
+            await enviar_mensaje(numero,
+                f"📦 *{texto}*\n"
+                f"✅ *{auto_paquetes} paquete(s) — {nombre_tam}*\n\n"
+                "📸 *Envía una foto de tu encomienda*\n"
+                "_(Para que el conductor sepa qué va a transportar)_\n\n"
+                "O escribe *omitir* si no tienes foto ahora.")
+        elif auto_paquetes:
+            # Solo cantidad detectada → saltar bultos, preguntar tamaño
+            datos["enc_paquetes"] = auto_paquetes
+            sesion["estado"] = S_ENCOMIENDA_TAMANO
+            await enviar_mensaje(numero,
+                f"📦 *{texto}*\n✅ *{auto_paquetes} paquete(s)*\n\n"
+                "📐 *¿Cuál es el tamaño?*\n\n"
+                "1️⃣ Sobre / Documento — S/3\n"
+                "2️⃣ Paquete pequeño _(hasta 2kg)_ — S/5\n"
+                "3️⃣ Paquete mediano _(2-10kg)_ — S/8\n"
+                "4️⃣ Paquete grande _(10-30kg)_ — S/12\n"
+                "5️⃣ Carga pesada _(+30kg)_ — A coordinar")
+        elif auto_tamano:
+            # Solo tamaño detectado → saltar a tamaño, preguntar cantidad
+            nombre_tam, equiv_pas, req_conf = auto_tamano
+            datos["enc_tamano"] = nombre_tam
+            datos["enc_equiv_pasajeros"] = equiv_pas
+            datos["enc_requiere_confirmacion"] = req_conf
+            datos["enc_tarifa_base"] = None
+            sesion["estado"] = S_ENCOMIENDA_BULTOS
+            await enviar_mensaje(numero,
+                f"📦 *{texto}*\n✅ *{nombre_tam}* detectado\n\n"
+                "🔢 *¿Cuántos paquetes son?*\n\n"
+                "1️⃣ Solo 1 paquete\n"
+                "2️⃣ 2 paquetes\n"
+                "3️⃣ 3 paquetes\n"
+                "4️⃣ 4 o más paquetes")
+        else:
+            # No detectamos nada → flujo normal
+            sesion["estado"] = S_ENCOMIENDA_BULTOS
+            await enviar_mensaje(numero,
+                f"📦 *{texto}*\n\n"
+                "🔢 *¿Cuántos paquetes vas a enviar?*\n\n"
+                "1️⃣ Solo 1 paquete\n"
+                "2️⃣ 2 paquetes\n"
+                "3️⃣ 3 paquetes\n"
+                "4️⃣ 4 o más paquetes")
 
     elif estado == S_ENCOMIENDA_BULTOS:
         paquetes_map = {"1": 1, "2": 2, "3": 3, "4": 4}
@@ -2355,13 +2445,13 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         # Tarifa siempre a coordinar — conductor la propone al ver el paquete
         datos["enc_tarifa_final"] = None
         if recargo_urgencia > 0:
-            tarifa_txt = f"A coordinar + S/{recargo_urgencia:.0f} urgente"
+            tarifa_txt = (f"El conductor confirmará el precio al aceptar\n"
+                          f"   + S/{recargo_urgencia:.0f} recargo por envío urgente")
         else:
-            tarifa_txt = "A coordinar con conductor"
-        detalle = "_(el conductor propone el precio al aceptar)_"
+            tarifa_txt = "El conductor confirmará el precio al aceptar"
         await enviar_mensaje(numero,
-            f"✅ Destinatario: *{texto}*\n"
-            f"💰 Tarifa: *{tarifa_txt}*\n{detalle}\n\n"
+            f"✅ Destinatario: *{texto}*\n\n"
+            f"💰 *Precio:* {tarifa_txt}\n\n"
             "💳 *¿Quién paga?*\n"
             "1️⃣ Yo pago ahora (Efectivo)\n"
             "2️⃣ Yo pago ahora (Yape)\n"
@@ -2401,8 +2491,13 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "🎉 *¡Encomienda registrada!*\n\nUn conductor te contactará pronto.\n\n━━━━━━━━━━━━━━━━\n1️⃣ Nuevo servicio\n0️⃣ Salir")
             asyncio.create_task(programar_calificacion(numero, datos_servicio))
         elif texto == "2":
-            sesiones[numero] = {"estado": S_MENU, "datos": {}}
-            await enviar_mensaje(numero, "❌ Cancelado.\n\n━━━━━━━━━━━━━━━━\n1️⃣ Nuevo servicio\n0️⃣ Salir")
+            sesiones.pop(numero, None)
+            historial_ia.pop(numero, None)
+            await enviar_mensaje(numero,
+                "❌ *Encomienda cancelada.*\n\n"
+                "━━━━━━━━━━━━━━━━\n"
+                "1️⃣ Nueva solicitud\n"
+                "0️⃣ Salir")
         else:
             await enviar_mensaje(numero, "Responde *1* confirmar o *2* cancelar.")
 
