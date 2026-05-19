@@ -130,6 +130,8 @@ S_TURISMO_CONFIRMAR  = "TURISMO_CONFIRMAR"
 S_CONSULTA_OPCION    = "CONSULTA_OPCION"
 S_CALIFICAR          = "CALIFICAR"
 S_CALIFICAR_COMMENT  = "CALIFICAR_COMMENT"
+S_RECLAMO            = "RECLAMO"      # Reclamo/sugerencia del cliente
+S_RECLAMO_TIPO       = "RECLAMO_TIPO" # Tipo de reclamo
 S_CUANDO             = "CUANDO"            # ¿Cuándo necesitas el taxi?
 S_COLECTIVO_RUTA     = "COLECTIVO_RUTA"     # Ruta del colectivo
 S_COLECTIVO_HORARIO  = "COLECTIVO_HORARIO"  # Horario de salida
@@ -225,6 +227,8 @@ PROMPT_VOLVER = {
 sesiones: dict[str, dict] = {}
 historial_ia: dict[str, list] = {}
 calificaciones: list[dict] = []  # historial de ratings
+tickets: list[dict] = []          # tickets de reclamos/sugerencias
+_ticket_counter: int = 0          # contador de tickets
 viajes_programados: list[dict] = []  # viajes agendados
 viajes_recurrentes: dict[str, dict] = {}  # viajes recurrentes por número
 
@@ -296,6 +300,7 @@ Estoy aquí para ayudarte con lo que necesites.
 4️⃣ Ruta turística 🗺️
 5️⃣ Ver tarifas
 6️⃣ Ayuda
+7️⃣ Reclamos y sugerencias 📋
 
 O escribe tu consulta libremente 💬"""
 
@@ -1384,6 +1389,15 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero, MSG_TARIFAS)
         elif texto == "6":
             await enviar_mensaje(numero, MSG_AYUDA)
+        elif texto == "7":
+            sesion["estado"] = S_RECLAMO_TIPO
+            await enviar_mensaje(numero,
+                "📋 *Reclamos y sugerencias*\n\n"
+                "¿Qué deseas reportar?\n\n"
+                "1️⃣ Reclamo — tuve un problema con el servicio\n"
+                "2️⃣ Sugerencia — quiero proponer una mejora\n"
+                "3️⃣ Consulta — tengo una pregunta\n\n"
+                "_(O escribe *menu* para volver)_")
         else:
             resp = await respuesta_ia(numero, texto)
             datos["ultima_consulta"] = texto
@@ -1414,6 +1428,53 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "¿Qué deseas hacer?\n\n"
                 "1️⃣ Hacer una solicitud ahora\n"
                 "2️⃣ Hablar con un operador 👤")
+
+    # ══ RECLAMOS ══════════════════════════════════════════════════════════════
+    elif estado == S_RECLAMO_TIPO:
+        tipos = {"1": "Reclamo", "2": "Sugerencia", "3": "Consulta"}
+        if texto not in tipos:
+            await enviar_mensaje(numero,
+                "Responde *1* Reclamo, *2* Sugerencia o *3* Consulta.")
+            return
+        datos["reclamo_tipo"] = tipos[texto]
+        sesion["estado"] = S_RECLAMO
+        await enviar_mensaje(numero,
+            f"📝 *{tipos[texto]}*\n\n"
+            "Cuéntanos con detalle qué pasó o qué propones:\n"
+            "_(Escribe tu mensaje)_")
+
+    elif estado == S_RECLAMO:
+        if len(texto.strip()) < 5:
+            await enviar_mensaje(numero, "Por favor describe tu mensaje con más detalle.")
+            return
+        global _ticket_counter
+        _ticket_counter += 1
+        ticket_id = f"TK-{_ticket_counter:04d}"
+        ticket = {
+            "id": ticket_id,
+            "numero": numero,
+            "tipo": datos.get("reclamo_tipo", "Consulta"),
+            "mensaje": texto.strip(),
+            "estado": "nuevo",
+            "timestamp": time.time(),
+            "respuesta": ""
+        }
+        tickets.append(ticket)
+        # Notificar operador
+        if OPERADOR_WA:
+            await enviar_mensaje(OPERADOR_WA,
+                f"📋 *NUEVO TICKET {ticket_id}*\n\n"
+                f"👤 Cliente: +{numero}\n"
+                f"📌 Tipo: {ticket['tipo']}\n"
+                f"💬 Mensaje: {texto.strip()}\n\n"
+                f"Responde desde el dashboard.")
+        sesiones[numero] = {"estado": S_MENU, "datos": {}}
+        await enviar_mensaje(numero,
+            f"✅ *¡Recibido! Ticket {ticket_id}*\n\n"
+            f"Tu {ticket['tipo'].lower()} fue registrado.\n"
+            f"Te contactaremos en menos de 2 horas.\n\n"
+            f"Gracias por ayudarnos a mejorar 🙏\n"
+            f"Escribe *menu* cuando necesites algo más.")
 
     # ══ NOMBRE ════════════════════════════════════════════════════════════════
     elif estado == S_NOMBRE:
@@ -2705,6 +2766,31 @@ async def recibir(request: Request):
     except Exception as e:
         print(f"[ERROR] {e}", flush=True)
         return {"status": "error"}
+
+@app.get("/tickets")
+async def get_tickets():
+    return {
+        "tickets": sorted(tickets, key=lambda x: x["timestamp"], reverse=True),
+        "total": len(tickets),
+        "nuevos": sum(1 for t in tickets if t["estado"] == "nuevo"),
+        "en_proceso": sum(1 for t in tickets if t["estado"] == "en_proceso"),
+        "resueltos": sum(1 for t in tickets if t["estado"] == "resuelto"),
+    }
+
+@app.post("/tickets/{ticket_id}/estado")
+async def update_ticket_estado(ticket_id: str, body: dict):
+    from fastapi import Body
+    for t in tickets:
+        if t["id"] == ticket_id:
+            t["estado"] = body.get("estado", t["estado"])
+            t["respuesta"] = body.get("respuesta", t["respuesta"])
+            if body.get("respuesta") and body.get("notificar", True):
+                await enviar_mensaje(t["numero"],
+                    f"📋 *Respuesta a tu ticket {ticket_id}*\n\n"
+                    f"_{body['respuesta']}_\n\n"
+                    f"— Equipo Barranca Móvil 🚖")
+            return {"ok": True, "ticket": t}
+    raise HTTPException(status_code=404, detail="Ticket no encontrado")
 
 @app.get("/")
 async def root():
