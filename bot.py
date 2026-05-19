@@ -1185,6 +1185,33 @@ def resumen_calificaciones() -> str:
     return texto
 
 # ── Procesador principal ──────────────────────────────────────────────────────
+
+async def cancelar_solicitud_actual(numero: str):
+    sesiones.pop(numero, None)
+    await enviar_mensaje(numero,
+        "Solicitud cancelada.\n\n"
+        "Cuando necesites otro servicio, escribe *menu*.")
+
+def es_comando_cancelar(texto: str) -> bool:
+    t = (texto or "").strip().lower()
+    return t in {
+        "salir", "cancelar", "cancela", "anular", "anula",
+        "ya no", "no deseo", "no quiero", "terminar", "finalizar",
+        "cancelar solicitud", "salir del servicio"
+    }
+
+def es_primer_paso_servicio(estado: str) -> bool:
+    primeros = {
+        globals().get("S_NOMBRE"),
+        globals().get("S_TAXI_NOMBRE"),
+        globals().get("S_COLECTIVO_RUTA"),
+        globals().get("S_ENCOMIENDA_DESC"),
+        globals().get("S_TURISMO_TIPO"),
+        globals().get("S_TURISMO_DESTINO"),
+    }
+    return estado in {x for x in primeros if x}
+
+
 async def procesar(numero: str, tipo: str, contenido: dict):
     if numero not in sesiones:
         sesiones[numero] = {"estado": S_MENU, "datos": {}}
@@ -1194,6 +1221,14 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     sesion = sesiones[numero]
     estado = sesion["estado"]
+    if es_comando_cancelar(texto):
+        await cancelar_solicitud_actual(numero)
+        return
+
+    if texto == "0" and es_primer_paso_servicio(estado):
+        await cancelar_solicitud_actual(numero)
+        return
+
     datos  = sesion["datos"]
 
     texto = ""
