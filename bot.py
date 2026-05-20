@@ -1361,19 +1361,36 @@ async def procesar_audio(numero: str, audio_payload: dict):
 
 
 
+
+def normalizar_nombre_persona(nombre: str) -> str:
+    nombre = " ".join((nombre or "").strip().split())
+    if not nombre:
+        return ""
+
+    minusculas = {"de", "del", "la", "las", "los", "y"}
+    partes = []
+
+    for i, p in enumerate(nombre.lower().split()):
+        if i > 0 and p in minusculas:
+            partes.append(p)
+        else:
+            partes.append(p.capitalize())
+
+    return " ".join(partes)
+
 def extraer_nombre_dni(texto: str):
     """Separa nombre y DNI si el usuario escribe ambos juntos. Ej: 'Zoila Tello, 15862130'."""
     import re
     raw = (texto or "").strip()
     m = re.search(r"\b(\d{7,9})\b", raw)
     if not m:
-        return raw.strip(" ,.-"), ""
+        return normalizar_nombre_persona(raw.strip(" ,.-")), ""
 
     dni = m.group(1)
     nombre = (raw[:m.start()] + " " + raw[m.end():]).strip(" ,.-")
     nombre = " ".join(nombre.split())
 
-    return nombre, dni
+    return normalizar_nombre_persona(nombre), dni
 
 async def procesar(numero: str, tipo: str, contenido: dict):
     if numero not in sesiones:
@@ -1991,7 +2008,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         if len(texto) < 2:
             await enviar_mensaje(numero, "Por favor escribe tu nombre.")
             return
-        datos["nombre"] = texto.title()
+        datos["nombre"] = normalizar_nombre_persona(texto).title()
         servicio = datos.get("servicio")
         if servicio == "TAXI":
             sesion["estado"] = S_CUANDO
@@ -3274,7 +3291,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         datos["_turismo_pasajero_idx"] = 0
         datos["_turismo_paso"] = "dni"
         datos["turismo_pasajeros_lista"] = []
-        datos["_turismo_nombre_temp"] = datos.get("nombre", "")
+        datos["_turismo_nombre_temp"] = normalizar_nombre_persona(datos.get("nombre", ""))
         sesion["estado"] = S_TURISMO_PASAJEROS
         await enviar_mensaje(numero,
             f"🔒 *Registro de pasajeros* ({personas} persona(s))\n\n"
@@ -3308,7 +3325,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                     await enviar_mensaje(numero, "❌ DNI inválido. Debe tener 7 u 8 dígitos, solo números:")
                     return
 
-                lista.append({"nombre": nombre_detectado, "dni": dni_detectado})
+                lista.append({"nombre": normalizar_nombre_persona(nombre_detectado), "dni": dni_detectado})
                 datos["turismo_pasajeros_lista"] = lista
                 siguiente = idx + 1
 
@@ -3336,7 +3353,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 await enviar_mensaje(numero, "❌ DNI inválido. Debe tener 7 u 8 dígitos, solo números:")
                 return
             nombre_temp = datos.get("_turismo_nombre_temp", "")
-            lista.append({"nombre": nombre_temp, "dni": dni})
+            lista.append({"nombre": normalizar_nombre_persona(nombre_temp), "dni": dni})
             datos["turismo_pasajeros_lista"] = lista
             siguiente = idx + 1
             if siguiente < personas:
