@@ -499,12 +499,34 @@ def _coincide_con_busqueda(texto_usuario: str, nombre_lugar: str) -> bool:
     return any(w in lugar_norm for w in importantes)
 
 
+def _referencia_local_barranca(nombre: str) -> str:
+    n = _normalizar_geo(nombre)
+
+    # Referencias locales conocidas de Barranca
+    if "lino" in n:
+        return "El Lino, referencia Calle Primavera, Barranca"
+
+    if "pasaje espana" in n or "pje espana" in n or "psje espana" in n:
+        return "Pasaje España, zona Pampa de Lara, Barranca"
+
+    if "parque guadalupe" in n or "virgen de guadalupe" in n or "guadalupe" in n:
+        return "Parque Virgen de Guadalupe, Barranca"
+
+    if "pasaje pelota" in n or "pje pelota" in n or "psje pelota" in n:
+        return "Pasaje Pelota, Barranca"
+
+    return ""
+
 def _limpiar_display_barranca(nombre: str) -> str:
     import re
 
     s = (nombre or "").strip()
     if not s:
         return "Barranca"
+
+    ref_local = _referencia_local_barranca(s)
+    if ref_local:
+        return ref_local
 
     # Quitar Plus Codes: 762X+C99, 4X5P+22, etc.
     s = re.sub(r"\b[23456789CFGHJMPQRVWX]{3,}\+[23456789CFGHJMPQRVWX0-9]{2,}\b", "", s, flags=re.I)
@@ -711,7 +733,26 @@ async def buscar_lugares_barranca(texto: str) -> list:
         print(f"[TEXT SEARCH ERROR] {e}", flush=True)
 
     candidatos.sort(key=lambda x: x.get("distancia_barranca", 999))
-    resultados = [{"nombre": c["nombre"], "place_id": c["place_id"]} for c in candidatos[:4]]
+
+    resultados = []
+    claves_nombre = set()
+
+    for c in candidatos:
+        nombre_limpio = _limpiar_display_barranca(c.get("nombre", ""))
+        clave = _normalizar_geo(nombre_limpio)
+
+        if not clave or clave in claves_nombre:
+            continue
+
+        claves_nombre.add(clave)
+        resultados.append({
+            "nombre": nombre_limpio,
+            "place_id": c["place_id"],
+        })
+
+        if len(resultados) >= 4:
+            break
+
     print(f"[GEO BARRANCA] '{texto_original}' -> {len(resultados)} resultado(s)", flush=True)
     return resultados
 
