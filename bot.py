@@ -290,6 +290,62 @@ COLECTIVO_HORARIOS = {
 }
 COLECTIVO_MAX_ASIENTOS = 4
 
+PROMO_TOPE = 7.00
+PROMO_CODIGO = "PROMO_PRIMER_SERVICIO_URBANO"
+
+
+def texto_es_promo(texto: str) -> bool:
+    t = (texto or "").lower().strip()
+    claves = [
+        "promo", "promocion", "promoción",
+        "gratis", "servicio gratis", "viaje gratis",
+        "primer servicio", "primer viaje",
+        "facebook", "anuncio", "descuento"
+    ]
+    return any(c in t for c in claves)
+
+
+def aplicar_promo_monto(datos: dict, monto: float, servicio: str) -> tuple[float, float, str]:
+    """
+    Aplica promo hasta S/7 si la sesión viene marcada con promo.
+    Retorna: descuento, total_final, texto_promo
+    """
+    try:
+        monto = float(monto or 0)
+    except Exception:
+        monto = 0.0
+
+    if not datos.get("promo_activa"):
+        return 0.0, monto, ""
+
+    servicio = (servicio or "").upper()
+
+    # Promo solo para servicios urbanos permitidos.
+    if servicio not in ["TAXI", "COLECTIVO", "ENCOMIENDA"]:
+        return 0.0, monto, ""
+
+    descuento = min(PROMO_TOPE, monto)
+    total_final = max(0.0, monto - descuento)
+
+    datos["promo_codigo"] = PROMO_CODIGO
+    datos["promo_descuento"] = descuento
+    datos["promo_total_final"] = total_final
+
+    if total_final <= 0:
+        texto_promo = (
+            f"\n🎁 *Promo aplicada:* -S/{descuento:.2f}\n"
+            f"✅ *Total a pagar: S/0.00*\n"
+        )
+    else:
+        texto_promo = (
+            f"\n🎁 *Promo aplicada:* -S/{descuento:.2f}\n"
+            f"💰 *Total con promo: S/{total_final:.2f}*\n"
+        )
+
+    return descuento, total_final, texto_promo
+
+
+
 SYSTEM_PROMPT_IA = """Eres el asistente de Barranca Móvil, servicio de taxis, encomiendas y turismo en Barranca, Perú.
 Servicios: TAXI urbano (S/3+S/1.20/km), interdistrital fijo, ENCOMIENDA local, TURISMO (Paramonga S/35, Caral S/60, Playas S/25, Huacho S/50).
 Pago: Efectivo o Yape. Responde en español, amigable, máximo 3 oraciones."""
@@ -2049,17 +2105,43 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     # ══ MENU ══════════════════════════════════════════════════════════════════
     elif estado == S_MENU:
+        if texto_es_promo(texto):
+            datos["promo_activa"] = True
+            datos["promo_codigo"] = PROMO_CODIGO
+            await enviar_mensaje(numero,
+                "🎉 *Promo de lanzamiento Barranca Móvil*\n\n"
+                "🎁 *Tu primer servicio urbano puede ser GRATIS*\n"
+                "💰 Valor máximo promocional: *S/7*\n"
+                "🎟️ Solo para los *10 primeros usuarios nuevos*\n\n"
+                "✅ Aplica para:\n"
+                "1️⃣ Taxi urbano dentro de Barranca\n"
+                "2️⃣ Primer cupo en colectivo compartido\n"
+                "3️⃣ Encomienda urbana pequeña\n\n"
+                "⚠️ No aplica para Lima, Huacho, turismo, viajes largos, anexos lejanos, cargas pesadas o riesgosas.\n\n"
+                "Elige el servicio que deseas solicitar:\n"
+                "1️⃣ Taxi urbano\n"
+                "2️⃣ Colectivo compartido\n"
+                "3️⃣ Encomienda urbana\n"
+                "0️⃣ Salir")
+            return
+
         if texto == "1":
             sesion["estado"] = S_NOMBRE
             datos["servicio"] = "TAXI"
+            if datos.get("promo_codigo") == PROMO_CODIGO:
+                datos["promo_activa"] = True
             await enviar_mensaje(numero, "🙋 Escribe tu nombre y primer apellido.\nEjemplo: Ana Torres\n\nTambién puedes enviar un audio breve si prefieres.")
         elif texto == "2":
             sesion["estado"] = S_NOMBRE
             datos["servicio"] = "COLECTIVO"
+            if datos.get("promo_codigo") == PROMO_CODIGO:
+                datos["promo_activa"] = True
             await enviar_mensaje(numero, "🚌 ¡Genial! Escribe tu nombre y primer apellido.\nEjemplo: Ana Torres\n\nTambién puedes enviar un audio breve si prefieres.")
         elif texto == "3":
             sesion["estado"] = S_NOMBRE
             datos["servicio"] = "ENCOMIENDA"
+            if datos.get("promo_codigo") == PROMO_CODIGO:
+                datos["promo_activa"] = True
             await enviar_mensaje(numero, "📦 ¡Perfecto! Escribe tu nombre y primer apellido.\nEjemplo: Ana Torres\n\nTambién puedes enviar un audio breve si prefieres.")
         elif texto == "4":
             sesion["estado"] = S_NOMBRE
@@ -2666,6 +2748,9 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero, "Responde *1* Efectivo o *2* Yape.")
             return
         sesion["estado"] = S_COLECTIVO_CONFIRMAR
+        _, total_final_promo, texto_promo = aplicar_promo_monto(datos, datos['colectivo_total'], "COLECTIVO")
+        datos["colectivo_total_final"] = total_final_promo
+
         await enviar_mensaje(numero,
             f"🚌 *Confirma tu cupo de colectivo compartido:*\n\n"
             f"👤 {datos['nombre']}\n"
@@ -2674,7 +2759,9 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             f"👥 Cupos solicitados: {datos['colectivo_asientos']}\n"
             f"📍 Recojo solicitado: {datos['colectivo_recojo']}\n"
             f"💰 Precio referencial: S/{datos['colectivo_total']:.2f}\n"
+            f"{texto_promo}"
             f"💳 {datos['colectivo_pago']}\n\n"
+            "📌 La salida se confirmará cuando se completen cupos o cuando un conductor acepte la ruta.\n\n"
             "1️⃣ *REGISTRAR CUPO* ✅\n2️⃣ *CANCELAR* ❌" + NAV)
 
     elif estado == S_COLECTIVO_CONFIRMAR:
@@ -2686,12 +2773,18 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "pago": datos.get("colectivo_pago")
             }, "colectivo")
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            promo_final = ""
+            if datos.get("promo_descuento"):
+                promo_final = f"\n🎁 Promo aplicada: -S/{datos.get('promo_descuento', 0):.2f}\nTotal final: S/{datos.get('promo_total_final', 0):.2f}\n"
+
             await enviar_mensaje(numero,
                 f"✅ *Cupo registrado* 🚌\n\n"
-                f"Salida programada: *{datos.get('colectivo_horario')}*\n"
+                f"Ruta: *{datos.get('colectivo_ruta')}*\n"
+                f"Horario solicitado: *{datos.get('colectivo_horario')}*\n"
+                f"{promo_final}\n"
                 f"Estamos agrupando pasajeros para esta ruta. Te avisaremos cuando un conductor confirme la salida.\n\n"
                 f"📌 *Recuerda:* el colectivo compartido sale cuando se completan "
-                f"los {COLECTIVO_MAX_ASIENTOS} asientos.\n\n"
+                f"los {COLECTIVO_MAX_ASIENTOS} asientos o cuando un conductor confirma disponibilidad.\n\n"
                 f"━━━━━━━━━━━━━━━━\n1️⃣ Nuevo servicio\n0️⃣ Salir")
 
         elif texto == "2":
