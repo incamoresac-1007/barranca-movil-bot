@@ -300,24 +300,24 @@ Estoy aquí para ayudarte con lo que necesites.
 ¿En qué te puedo ayudar hoy?
 
 1️⃣ Solicitar taxi
-2️⃣ Colectivo puerta a puerta 🚌
+2️⃣ Colectivo compartido con recojo a domicilio 🚌
 3️⃣ Envío de encomienda 📦
 4️⃣ Ruta turística 🗺️
 0️⃣ Salir
 
-O escribe tu consulta libremente 💬"""
+🎁 Promo de lanzamiento: *primer servicio urbano gratis hasta S/7*.\nEscribe *promo* para consultar condiciones.\n\nO escribe tu consulta libremente 💬"""
 
 MSG_TARIFAS = """💰 *Tarifas Barranca Móvil*
 
 🚖 *Taxi Urbano:* S/3.00 + S/1.20/km
 
-🚌 *Colectivo Puerta a Puerta:*
+🚌 *Colectivo compartido con recojo a domicilio:*
 • Pativilca: S/4 | Paramonga: S/6
 • Puerto Supe: S/4 | Supe Pueblo: S/5
 • San Nicolás: S/6 | Huacho: S/10
 • Lima: S/50
-✅ *Precio incluye recojo en tu domicilio*
-_(2+ asientos: descuento en recojo S/0.50 c/u)_
+✅ *Incluye solicitud de recojo a domicilio*
+_Salida sujeta a cupos disponibles o confirmación del conductor._
 
 🛣️ *Taxi Interdistrital:*
 • Pativilca: S/3.50 | Paramonga: S/5.00
@@ -1190,7 +1190,7 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
                f"📦 {d.get('enc_descripcion')} — {d.get('enc_tamano')}\n"
                f"🔢 {d.get('enc_paquetes', 1)} paquete(s) | 📸 {foto_txt}\n"
                f"⏰ {d.get('enc_urgencia')}\n"
-               f"📍 Recojo: {d.get('enc_origen')}\n"
+               f"📍 Recojo solicitado: {d.get('enc_origen')}\n"
                f"🏁 Destino: {d.get('enc_destino')}\n"
                f"👤 Destinatario: {d.get('enc_destinatario')}\n"
                f"💰 {tarifa_txt} | 💳 {d.get('pago')}{contra_entrega}\n\n"
@@ -1201,7 +1201,7 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
                f"{d.get('colectivo_emoji','')} {d.get('colectivo_ruta')}\n"
                f"🕐 {d.get('colectivo_horario')}\n"
                f"👥 {d.get('colectivo_asientos')} asiento(s) confirmados\n"
-               f"📍 Recojo: {d.get('colectivo_recojo')}\n"
+               f"📍 Recojo solicitado: {d.get('colectivo_recojo')}\n"
                f"💰 S/{d.get('colectivo_total')} | 💳 {d.get('colectivo_pago')}\n\n"
                f"💡 Puedes completar el cupo en el paradero\n\n"
                f"Responde: *ACEPTO {numero_cliente}*")
@@ -1639,7 +1639,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                     f"🧾 Tipo: *{tipo_servicio}*\n"
                     f"👤 Cliente: {servicio['datos'].get('nombre', 'N/A')}\n"
                     f"📱 Teléfono: +{numero_cliente_full}\n"
-                    f"📍 Recojo: {servicio['datos'].get('recojo_texto') or servicio['datos'].get('colectivo_recojo') or servicio['datos'].get('enc_origen', 'N/A')}\n"
+                    f"📍 Recojo solicitado: {servicio['datos'].get('recojo_texto') or servicio['datos'].get('colectivo_recojo') or servicio['datos'].get('enc_origen', 'N/A')}\n"
                     f"🏁 Destino/Ruta: {servicio['datos'].get('destino_texto') or servicio['datos'].get('colectivo_ruta') or servicio['datos'].get('enc_destino', 'N/A')}\n"
                     f"💳 Pago: {servicio['datos'].get('pago') or servicio['datos'].get('colectivo_pago') or 'A coordinar'}\n\n"
                     f"Coordina directamente con el cliente.\n"
@@ -1652,7 +1652,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                     f"🚗 Placa: *{conductor['placa']}*\n"
                     f"📱 Contacto: +{numero}\n\n"
                     f"🧾 Servicio: *{tipo_servicio}*\n"
-                    f"📍 Recojo: {servicio['datos'].get('recojo_texto') or servicio['datos'].get('colectivo_recojo') or servicio['datos'].get('enc_origen', 'N/A')}\n"
+                    f"📍 Recojo solicitado: {servicio['datos'].get('recojo_texto') or servicio['datos'].get('colectivo_recojo') or servicio['datos'].get('enc_origen', 'N/A')}\n"
                     f"🏁 Destino/Ruta: {servicio['datos'].get('destino_texto') or servicio['datos'].get('colectivo_ruta') or servicio['datos'].get('enc_destino', 'N/A')}\n\n"
                     f"El conductor te contactará en breve.\n"
                     f"Escribe *menu* para otra solicitud.")
@@ -2180,7 +2180,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 f"👍 Hola *{datos['nombre']}*! 🚌\n\n"
                 f"*¿A dónde vas?*\n\n"
                 f"{rutas_txt}\n\n"
-                f"_(Precios por pasajero, incluye recojo en tu domicilio)_")
+                f"_(Precio por pasajero. Recojo a domicilio sujeto a cupos disponibles o confirmación del conductor)_" + NAV)
         elif servicio == "ENCOMIENDA":
             sesion["estado"] = S_ENCOMIENDA_DESC
             await enviar_mensaje(numero,
@@ -2473,7 +2473,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             f"{linea_tiempo}"
             f"📍 {datos['recojo_texto']}\n"
             f"🏁 {datos['destino_texto']}\n💰 S/{datos['tarifa']}\n💳 {datos['pago']}\n\n"
-            "1️⃣ *CONFIRMAR* ✅\n2️⃣ *CANCELAR* ❌" + NAV)
+            "1️⃣ *REGISTRAR CUPO* ✅\n2️⃣ *CANCELAR* ❌" + NAV)
 
     elif estado == S_CONFIRMAR:
         if texto == "1":
@@ -2532,10 +2532,11 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         sesion["estado"] = S_COLECTIVO_HORARIO
         await enviar_mensaje(numero,
             f"{ruta['emoji']} *{ruta['nombre']}* — S/{ruta['tarifa']:.2f} por pasajero\n\n"
+            "📌 *Importante:* este servicio es compartido.\n"
+            "La salida depende de cupos disponibles o confirmación del conductor.\n\n"
             f"🕐 *¿Cuándo necesitas el colectivo?*\n\n"
             f"1️⃣ Ahora mismo 🚀\n"
-            f"2️⃣ Indicar hora 🕐\n\n"
-            f"_(El conductor puede completar el cupo en el paradero)_")
+            f"2️⃣ Indicar hora 🕐" + NAV)
 
     elif estado == S_COLECTIVO_HORARIO:
         if texto == "1":
@@ -2666,15 +2667,15 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             return
         sesion["estado"] = S_COLECTIVO_CONFIRMAR
         await enviar_mensaje(numero,
-            f"🚌 *Confirma tu colectivo:*\n\n"
+            f"🚌 *Confirma tu cupo de colectivo compartido:*\n\n"
             f"👤 {datos['nombre']}\n"
             f"{datos['colectivo_emoji']} Ruta: {datos['colectivo_ruta']}\n"
             f"🕐 Horario: {datos['colectivo_horario']}\n"
-            f"👥 Asientos: {datos['colectivo_asientos']}\n"
-            f"📍 Recojo: {datos['colectivo_recojo']}\n"
-            f"💰 Total: S/{datos['colectivo_total']:.2f}\n"
+            f"👥 Cupos solicitados: {datos['colectivo_asientos']}\n"
+            f"📍 Recojo solicitado: {datos['colectivo_recojo']}\n"
+            f"💰 Precio referencial: S/{datos['colectivo_total']:.2f}\n"
             f"💳 {datos['colectivo_pago']}\n\n"
-            "1️⃣ *CONFIRMAR* ✅\n2️⃣ *CANCELAR* ❌" + NAV)
+            "1️⃣ *REGISTRAR CUPO* ✅\n2️⃣ *CANCELAR* ❌" + NAV)
 
     elif estado == S_COLECTIVO_CONFIRMAR:
         if texto == "1":
@@ -2686,10 +2687,10 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             }, "colectivo")
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
             await enviar_mensaje(numero,
-                f"🎉 *¡Colectivo reservado!*\n\n"
+                f"✅ *Cupo registrado* 🚌\n\n"
                 f"Salida programada: *{datos.get('colectivo_horario')}*\n"
-                f"Estamos buscando conductor. Te contactarán pronto.\n\n"
-                f"📌 *Recuerda:* el colectivo sale cuando se completan "
+                f"Estamos agrupando pasajeros para esta ruta. Te avisaremos cuando un conductor confirme la salida.\n\n"
+                f"📌 *Recuerda:* el colectivo compartido sale cuando se completan "
                 f"los {COLECTIVO_MAX_ASIENTOS} asientos.\n\n"
                 f"━━━━━━━━━━━━━━━━\n1️⃣ Nuevo servicio\n0️⃣ Salir")
 
@@ -3253,13 +3254,13 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             f"📦 {datos['enc_descripcion']} — {datos['enc_tamano']}\n"
             f"🔢 {paquetes} {'paquete' if int(paquetes) == 1 else 'paquetes'} | 📸 {foto_txt}\n"
             f"⏰ {datos['enc_urgencia']}\n"
-            f"📍 Recojo: {datos['enc_origen']}\n"
+            f"📍 Recojo solicitado: {datos['enc_origen']}\n"
             f"🏁 Destino: {datos['enc_destino']}\n"
             f"👤 Destinatario: {datos['enc_destinatario']}\n"
             + (f"🪪 DNI destinatario: {datos['enc_destinatario_dni']}\n" if datos.get("enc_destinatario_dni") else "")
             + f"💰 {tarifa_txt}\n"
             f"💳 {datos['pago']}\n\n"
-            "1️⃣ *CONFIRMAR* ✅\n2️⃣ *CANCELAR* ❌" + NAV)
+            "1️⃣ *REGISTRAR CUPO* ✅\n2️⃣ *CANCELAR* ❌" + NAV)
 
     elif estado == S_ENCOMIENDA_CONFIRMAR:
         if texto == "1":
@@ -3655,12 +3656,12 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             f"👥 {datos['personas']} persona(s) — {datos['tipo_grupo']}\n"
             + (f"👥 Pasajeros adicionales:\n{datos['turismo_pasajeros_extra']}\n" if datos.get('turismo_pasajeros_extra') else "")
             + f"📅 {datos['fecha']}\n"
-            f"📍 Recojo: {datos['recojo_texto']}\n"
+            f"📍 Recojo solicitado: {datos['recojo_texto']}\n"
             f"⏱️ Duración aprox: {datos['ruta_duracion']}\n"
             f"💰 Precio referencial: S/{precio_total}{nota_caral}\n"
             f"💳 {datos['pago']}"
             f"{nota_negociacion}\n\n"
-            "1️⃣ *CONFIRMAR* ✅\n2️⃣ *CANCELAR* ❌" + NAV)
+            "1️⃣ *REGISTRAR CUPO* ✅\n2️⃣ *CANCELAR* ❌" + NAV)
 
     elif estado == S_TURISMO_CONFIRMAR:
         if texto == "1":
