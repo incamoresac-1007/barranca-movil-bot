@@ -361,7 +361,7 @@ Estoy aquí para ayudarte con lo que necesites.
 4️⃣ Ruta turística 🗺️
 0️⃣ Salir
 
-🎁 Promo de lanzamiento: *primer servicio urbano gratis hasta S/7*.\nEscribe *promo* para consultar condiciones.\n\nO escribe tu consulta libremente 💬"""
+🎁 Promo de lanzamiento: *primer servicio de movilidad puede salirte GRATIS*.\nEscribe *promo* para consultar condiciones.\n\nO escribe tu consulta libremente 💬"""
 
 MSG_TARIFAS = """💰 *Tarifas Barranca Móvil*
 
@@ -2110,18 +2110,18 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             datos["promo_codigo"] = PROMO_CODIGO
             await enviar_mensaje(numero,
                 "🎉 *Promo de lanzamiento Barranca Móvil*\n\n"
-                "🎁 *Tu primer servicio urbano puede ser GRATIS*\n"
+                "🎁 *Tu primer servicio de movilidad puede salirte GRATIS*\n"
                 "💰 Valor máximo promocional: *S/7*\n"
-                "🎟️ Solo para los *10 primeros usuarios nuevos*\n\n"
+                "🎟️ Solo para los *10 primeros usuarios nuevos*\n\n📌 *¿Cómo funciona?*\nSi tu viaje cuesta *S/7 o menos*, te sale *GRATIS*.\nSi cuesta más de *S/7*, solo pagas la diferencia.\n\n"
                 "✅ Aplica para:\n"
                 "1️⃣ Taxi urbano dentro de Barranca\n"
                 "2️⃣ Primer cupo en colectivo compartido\n"
-                "3️⃣ Encomienda urbana pequeña\n\n"
+                "3️⃣ No aplica para encomiendas\n\n"
                 "⚠️ No aplica para Lima, Huacho, turismo, viajes largos, anexos lejanos, cargas pesadas o riesgosas.\n\n"
                 "Elige el servicio que deseas solicitar:\n"
                 "1️⃣ Taxi urbano\n"
                 "2️⃣ Colectivo compartido\n"
-                "3️⃣ Encomienda urbana\n"
+                "3️⃣ Envío de encomienda\n"
                 "0️⃣ Salir")
             return
 
