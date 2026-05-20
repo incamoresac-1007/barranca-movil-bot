@@ -432,6 +432,114 @@ async def registrar_turismo_sheets(datos_turismo: dict):
     except Exception as e:
         print(f"[SHEETS ERROR] {e}", flush=True)
 
+
+
+def generar_id_servicio(numero_cliente: str, tipo: str) -> str:
+    sufijo = str(numero_cliente)[-4:]
+    ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    prefijo = (tipo or "SRV")[:3].upper()
+    return f"BM-{prefijo}-{sufijo}-{ts}"
+
+
+def armar_sheets_servicio(numero_cliente: str, tipo: str, d: dict, estado: str, conductor: dict | None = None) -> dict:
+    """Arma una fila estándar para la pestaña SERVICIOS."""
+    if not d.get("id_servicio"):
+        d["id_servicio"] = generar_id_servicio(numero_cliente, tipo)
+
+    origen = (
+        d.get("recojo_texto")
+        or d.get("colectivo_recojo")
+        or d.get("enc_origen")
+        or d.get("recojo")
+        or ""
+    )
+
+    destino = (
+        d.get("destino_texto")
+        or d.get("colectivo_ruta")
+        or d.get("enc_destino")
+        or d.get("ruta_nombre")
+        or ""
+    )
+
+    pago = (
+        d.get("pago")
+        or d.get("colectivo_pago")
+        or ""
+    )
+
+    tarifa = (
+        d.get("tarifa")
+        or d.get("colectivo_total")
+        or d.get("enc_tarifa_final")
+        or d.get("ruta_precio_ref")
+        or "A coordinar"
+    )
+
+    if tarifa is None:
+        tarifa = "A coordinar"
+
+    alerta = ""
+    prioridad = "BAJA"
+
+    cuidado = (d.get("enc_cuidado_extra") or "").lower()
+    tamano = (d.get("enc_tamano") or "").lower()
+
+    if "gas" in cuidado or "riesgosa" in cuidado or "carga especial" in tamano:
+        alerta = "CARGA_RIESGOSA"
+        prioridad = "CRITICA"
+    elif "bebida" in cuidado or "liquido" in cuidado or "líquido" in cuidado:
+        alerta = "BEBIDAS_LIQUIDO"
+        prioridad = "MEDIA"
+    elif tipo == "TURISMO":
+        alerta = "VALIDAR_IDENTIDADES"
+        prioridad = "ALTA"
+
+    conductor = conductor or {}
+
+    return {
+        "ID_SERVICIO": d.get("id_servicio"),
+        "estado": estado,
+        "tipo_servicio": tipo,
+        "canal": d.get("canal_origen", "WHATSAPP"),
+        "cliente": d.get("nombre", ""),
+        "telefono": str(numero_cliente).replace("51", "", 1) if str(numero_cliente).startswith("51") else str(numero_cliente),
+        "dni_cliente": d.get("turismo_dni_principal", ""),
+        "origen": origen,
+        "destino": destino,
+        "ruta": d.get("colectivo_ruta") or d.get("ruta_nombre") or "",
+        "conductor": conductor.get("nombre", ""),
+        "placa": conductor.get("placa", ""),
+        "telefono_conductor": conductor.get("telefono", ""),
+        "pago": pago,
+        "tarifa": str(tarifa),
+        "prioridad": prioridad,
+        "alerta": alerta,
+        "observacion": d.get("observacion_sheets", ""),
+        "hora_confirmacion": d.get("hora_confirmacion", ""),
+        "hora_asignacion": datetime.now().strftime("%H:%M") if estado == "ASIGNADO" else "",
+    }
+
+
+async def sheets_evento(action: str, data: dict):
+    """Envía eventos operativos a Google Sheets. No debe romper el bot si falla."""
+    webhook_url = os.getenv("SHEETS_WEBHOOK_URL", "")
+    if not webhook_url:
+        print("[SHEETS] No configurado SHEETS_WEBHOOK_URL", flush=True)
+        return
+
+    try:
+        payload = {
+            "action": action,
+            "data": data,
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(webhook_url, json=payload)
+            print(f"[SHEETS] {action}: {r.status_code} {r.text[:120]}", flush=True)
+    except Exception as e:
+        print(f"[SHEETS ERROR] {action}: {e}", flush=True)
+
+
 # ── Google Maps ───────────────────────────────────────────────────────────────
 async def coords_a_direccion(lat, lng) -> str:
     url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lng}&key={GOOGLE_MAPS_KEY}&language=es"
@@ -1051,6 +1159,9 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
     """Envía solicitud a todos los conductores individualmente.
     El primero en responder ACEPTO se lleva el servicio."""
     d = sesion["datos"]
+    if not d.get("id_servicio"):
+        d["id_servicio"] = generar_id_servicio(numero_cliente, tipo)
+    d["hora_confirmacion"] = datetime.now().strftime("%H:%M")
 
     if tipo == "TAXI":
         cuando = d.get("cuando", "ahora")
@@ -1135,10 +1246,24 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
         tareas.append(enviar_mensaje(GRUPO_CONDUCTORES, msg))
     await asyncio.gather(*tareas)
 
+    asyncio.create_task(sheets_evento(
+        "upsert_servicio",
+        armar_sheets_servicio(numero_cliente, tipo, d, "PENDIENTE_CONDUCTOR")
+    ))
+
     # Timeout 90s: si nadie acepta, avisar al cliente
     async def timeout_sin_conductor():
         await asyncio.sleep(180)
         if numero_cliente in servicios_pendientes:
+            servicio_timeout = servicios_pendientes.get(numero_cliente, {})
+            datos_timeout = servicio_timeout.get("datos", {})
+            tipo_timeout = servicio_timeout.get("tipo", tipo)
+
+            await sheets_evento(
+                "upsert_servicio",
+                armar_sheets_servicio(numero_cliente, tipo_timeout, datos_timeout, "SIN_CONDUCTOR")
+            )
+
             servicios_pendientes.pop(numero_cliente, None)
             await enviar_mensaje(numero_cliente,
                 "😔 *Sin conductores disponibles*\n\n"
@@ -1465,6 +1590,11 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             conductor = CONDUCTORES[numero]
             tipo_servicio = servicio.get("tipo", "TAXI")
 
+            asyncio.create_task(sheets_evento(
+                "upsert_servicio",
+                armar_sheets_servicio(numero_cliente_full, tipo_servicio, servicio["datos"], "ASIGNADO", conductor)
+            ))
+
             # Avisar a los demás conductores
             for num_cond in CONDUCTORES.keys():
                 if num_cond != numero:
@@ -1553,6 +1683,11 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 servicio = servicios_pendientes.pop(numero_cliente_full)
                 conductor = CONDUCTORES[numero]
                 tipo_servicio = servicio.get("tipo", "TAXI")
+
+                asyncio.create_task(sheets_evento(
+                    "upsert_servicio",
+                    armar_sheets_servicio(numero_cliente_full, tipo_servicio, servicio["datos"], "ASIGNADO", conductor)
+                ))
 
                 for num_cond in CONDUCTORES.keys():
                     if num_cond != numero:
