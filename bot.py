@@ -1212,6 +1212,113 @@ def es_primer_paso_servicio(estado: str) -> bool:
     return estado in {x for x in primeros if x}
 
 
+
+async def descargar_media_whatsapp(media_id: str) -> tuple[str, str]:
+    import tempfile
+
+    if not media_id:
+        raise ValueError("media_id vacio")
+
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    meta_url = f"https://graph.facebook.com/v19.0/{media_id}"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(meta_url, headers=headers)
+        if r.status_code >= 400:
+            raise RuntimeError(f"Meta media URL error {r.status_code}: {r.text}")
+        info = r.json()
+
+    download_url = info.get("url")
+    mime_type = info.get("mime_type", "audio/ogg")
+
+    if not download_url:
+        raise RuntimeError("Meta no devolvio URL de descarga")
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.get(download_url, headers=headers)
+        if r.status_code >= 400:
+            raise RuntimeError(f"Meta media download error {r.status_code}: {r.text}")
+        data = r.content
+
+    suffix = ".ogg"
+    if "mpeg" in mime_type or "mp3" in mime_type:
+        suffix = ".mp3"
+    elif "mp4" in mime_type or "m4a" in mime_type:
+        suffix = ".m4a"
+    elif "wav" in mime_type:
+        suffix = ".wav"
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp.write(data)
+    tmp.close()
+
+    return tmp.name, mime_type
+
+
+async def transcribir_audio_groq(ruta_audio: str) -> str:
+    from pathlib import Path as _Path
+
+    if not GROQ_API_KEY:
+        raise RuntimeError("Falta GROQ_API_KEY")
+
+    url = "https://api.groq.com/openai/v1/audio/transcriptions"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+
+    audio_path = _Path(ruta_audio)
+    if not audio_path.exists():
+        raise RuntimeError(f"No existe el audio descargado: {ruta_audio}")
+
+    data = {
+        "model": "whisper-large-v3-turbo",
+        "language": "es",
+        "response_format": "json",
+        "temperature": "0",
+    }
+
+    with audio_path.open("rb") as f:
+        files = {"file": (audio_path.name, f, "application/octet-stream")}
+        async with httpx.AsyncClient(timeout=90) as client:
+            r = await client.post(url, headers=headers, data=data, files=files)
+
+    if r.status_code >= 400:
+        raise RuntimeError(f"Groq transcription error {r.status_code}: {r.text}")
+
+    resp = r.json()
+    return (resp.get("text") or "").strip()
+
+
+async def procesar_audio(numero: str, audio_payload: dict):
+    import os
+
+    media_id = (audio_payload or {}).get("id", "")
+    if not media_id:
+        await enviar_mensaje(numero, "No pude leer el audio. Intenta enviarlo nuevamente.")
+        return
+
+    ruta_audio = ""
+    try:
+        await enviar_mensaje(numero, "Audio recibido. Lo estoy escuchando...")
+        ruta_audio, _mime_type = await descargar_media_whatsapp(media_id)
+        texto_audio = await transcribir_audio_groq(ruta_audio)
+
+        if not texto_audio or len(texto_audio.strip()) < 2:
+            await enviar_mensaje(numero, "No logre entender el audio. Por favor envialo otra vez o escribe tu solicitud.")
+            return
+
+        await enviar_mensaje(numero, f"Entendi:\n_{texto_audio}_")
+        await procesar(numero, "text", {"body": texto_audio})
+
+    except Exception as e:
+        print(f"[AUDIO ERROR] {e}", flush=True)
+        await enviar_mensaje(numero, "No pude procesar el audio. Por favor escribe tu solicitud o intenta enviar otro audio.")
+    finally:
+        if ruta_audio:
+            try:
+                os.remove(ruta_audio)
+            except Exception:
+                pass
+
+
 async def procesar(numero: str, tipo: str, contenido: dict):
     if numero not in sesiones:
         sesiones[numero] = {"estado": S_MENU, "datos": {}}
@@ -3253,6 +3360,8 @@ async def recibir(request: Request):
                 await procesar(numero, "location", msg.get("location", {}))
             elif tipo == "image":
                 await procesar(numero, "image", msg.get("image", {}))
+            elif tipo == "audio":
+                await procesar_audio(numero, msg.get("audio", {}))
             else:
                 await enviar_mensaje(numero, "Solo entiendo texto, ubicaciones e imágenes 😊\n\nEscribe *menu* para comenzar.")
 
