@@ -1,0 +1,6 @@
+﻿.env
+__pycache__/
+*.pyc
+bot_backup*.py
+patch_bot*.py
+fix_*.py
