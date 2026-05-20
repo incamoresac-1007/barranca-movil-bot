@@ -2959,20 +2959,38 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     elif estado == S_ENCOMIENDA_DESTINATARIO:
         if len(texto) < 3:
-            await enviar_mensaje(numero, "Indica nombre y teléfono del destinatario.")
+            await enviar_mensaje(numero,
+                "Indica nombre y DNI del destinatario.\n"
+                "Ejemplo: Abel Salinas, 16874530")
             return
-        datos["enc_destinatario"] = texto
+
+        nombre_dest, dni_dest = extraer_nombre_dni(texto)
+
+        if len(nombre_dest) < 3:
+            await enviar_mensaje(numero,
+                "Indica el nombre del destinatario.\n"
+                "Ejemplo: Abel Salinas, 16874530")
+            return
+
+        datos["enc_destinatario"] = normalizar_nombre_persona(nombre_dest)
+        datos["enc_destinatario_dni"] = dni_dest
+
         sesion["estado"] = S_ENCOMIENDA_PAGO
         recargo_urgencia = datos.get("enc_recargo", 0)
+
         # Tarifa siempre a coordinar — conductor la propone al ver el paquete
         datos["enc_tarifa_final"] = None
+
         if recargo_urgencia > 0:
             tarifa_txt = (f"El conductor confirmará el precio al aceptar\n"
                           f"   + S/{recargo_urgencia:.0f} recargo por envío urgente")
         else:
             tarifa_txt = "El conductor confirmará el precio al aceptar"
+
+        linea_dni = f"\n🪪 DNI: *{dni_dest}*" if dni_dest else ""
+
         await enviar_mensaje(numero,
-            f"✅ Destinatario: *{texto}*\n\n"
+            f"✅ Destinatario: *{datos['enc_destinatario']}*{linea_dni}\n\n"
             f"💰 *Precio:* {tarifa_txt}\n\n"
             "💳 *¿Quién paga?*\n"
             "1️⃣ Yo pago ahora (Efectivo)\n"
@@ -2999,7 +3017,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             f"📍 Recojo: {datos['enc_origen']}\n"
             f"🏁 Destino: {datos['enc_destino']}\n"
             f"👤 Destinatario: {datos['enc_destinatario']}\n"
-            f"💰 {tarifa_txt}\n"
+            + (f"🪪 DNI destinatario: {datos['enc_destinatario_dni']}\n" if datos.get("enc_destinatario_dni") else "")
+            + f"💰 {tarifa_txt}\n"
             f"💳 {datos['pago']}\n\n"
             "1️⃣ *CONFIRMAR* ✅\n2️⃣ *CANCELAR* ❌" + NAV)
 
