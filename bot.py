@@ -1360,6 +1360,21 @@ async def procesar_audio(numero: str, audio_payload: dict):
                 pass
 
 
+
+def extraer_nombre_dni(texto: str):
+    """Separa nombre y DNI si el usuario escribe ambos juntos. Ej: 'Zoila Tello, 15862130'."""
+    import re
+    raw = (texto or "").strip()
+    m = re.search(r"\b(\d{7,9})\b", raw)
+    if not m:
+        return raw.strip(" ,.-"), ""
+
+    dni = m.group(1)
+    nombre = (raw[:m.start()] + " " + raw[m.end():]).strip(" ,.-")
+    nombre = " ".join(nombre.split())
+
+    return nombre, dni
+
 async def procesar(numero: str, tipo: str, contenido: dict):
     if numero not in sesiones:
         sesiones[numero] = {"estado": S_MENU, "datos": {}}
@@ -3279,15 +3294,42 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             datos["turismo_pasajeros_extra"] = " | ".join(
                 [f"{p['nombre']} / {p['dni']}" for p in lista[1:]]) if len(lista) > 1 else ""
         elif paso == "nombre":
-            if len(txt_norm) < 3:
+            nombre_detectado, dni_detectado = extraer_nombre_dni(txt_norm)
+
+            if len(nombre_detectado) < 3:
                 await enviar_mensaje(numero, "✍️ Escribe el nombre completo del pasajero:")
                 return
-            datos["_turismo_nombre_temp"] = txt_norm
-            datos["_turismo_paso"] = "dni"
-            await enviar_mensaje(numero,
-                f"👤 *{txt_norm}*\n"
-                f"🪪 *DNI del pasajero {idx+1}:*\n_(8 dígitos)_")
-            return
+
+            datos["_turismo_nombre_temp"] = nombre_detectado
+
+            # Si el usuario escribió nombre + DNI juntos, registrar ambos sin volver a pedir DNI.
+            if dni_detectado:
+                if not dni_detectado.isdigit() or not (7 <= len(dni_detectado) <= 9):
+                    await enviar_mensaje(numero, "❌ DNI inválido. Debe tener 7 u 8 dígitos, solo números:")
+                    return
+
+                lista.append({"nombre": nombre_detectado, "dni": dni_detectado})
+                datos["turismo_pasajeros_lista"] = lista
+                siguiente = idx + 1
+
+                if siguiente < personas:
+                    datos["_turismo_pasajero_idx"] = siguiente
+                    datos["_turismo_paso"] = "nombre"
+                    await enviar_mensaje(numero,
+                        f"✅ Pasajero {idx+1} registrado.\n\n"
+                        f"👤 *Nombre del pasajero {siguiente+1}:*")
+                    return
+                else:
+                    datos["turismo_dni_principal"] = lista[0]["dni"] if lista else "—"
+                    datos["turismo_pasajeros_extra"] = "\n".join(
+                        [f"{n+2}. {p['nombre']} | DNI: {p['dni']}" for n, p in enumerate(lista[1:])]
+                    ) if len(lista) > 1 else ""
+            else:
+                datos["_turismo_paso"] = "dni"
+                await enviar_mensaje(numero,
+                    f"👤 *{nombre_detectado}*\n"
+                    f"🪪 *DNI del pasajero {idx+1}:*\n_(8 dígitos)_")
+                return
         elif paso == "dni":
             dni = txt_norm.replace(" ", "")
             if not dni.isdigit() or not (7 <= len(dni) <= 9):
@@ -3306,8 +3348,9 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 return
             else:
                 datos["turismo_dni_principal"] = lista[0]["dni"] if lista else "—"
-                datos["turismo_pasajeros_extra"] = " | ".join(
-                    [f"{p['nombre']} / {p['dni']}" for p in lista[1:]]) if len(lista) > 1 else ""
+                datos["turismo_pasajeros_extra"] = "\n".join(
+                    [f"{n+2}. {p['nombre']} | DNI: {p['dni']}" for n, p in enumerate(lista[1:])]
+                ) if len(lista) > 1 else ""
         else:
             return
 
@@ -3327,7 +3370,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             f"{datos.get('ruta_opcion', '')}\n"
             f"🔄 {datos.get('modalidad', 'Ida y vuelta')}\n"
             f"👥 {datos['personas']} persona(s) — {datos['tipo_grupo']}\n"
-            + (f"👥 Otros: {datos['turismo_pasajeros_extra']}\n" if datos.get('turismo_pasajeros_extra') else "")
+            + (f"👥 Pasajeros adicionales:\n{datos['turismo_pasajeros_extra']}\n" if datos.get('turismo_pasajeros_extra') else "")
             + f"📅 {datos['fecha']}\n"
             f"📍 Recojo: {datos['recojo_texto']}\n"
             f"⏱️ Duración aprox: {datos['ruta_duracion']}\n"
