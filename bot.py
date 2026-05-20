@@ -2802,16 +2802,24 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         if texto not in paquetes_map:
             await enviar_mensaje(numero, "Responde del *1* al *4*.")
             return
+
         datos["enc_paquetes"] = paquetes_map[texto]
-        sesion["estado"] = S_ENCOMIENDA_TAMANO
+        datos["enc_tamano"] = "A coordinar"
+        datos["enc_equiv_pasajeros"] = 2 if datos["enc_paquetes"] <= 2 else 3
+        datos["enc_requiere_confirmacion"] = True
+        datos["enc_tarifa_base"] = None
+
+        paquetes_txt = "1 bulto/paquete" if datos["enc_paquetes"] == 1 else f"{datos['enc_paquetes']} bultos/paquetes"
+
+        sesion["estado"] = S_ENCOMIENDA_FOTO
         await enviar_mensaje(numero,
-            f"✅ *{datos['enc_paquetes']} paquete(s)*\n\n"
-            "📐 *¿Cuál es el paquete más grande?*\n\n"
-            "1️⃣ Sobre / Documento — S/3\n"
-            "2️⃣ Paquete pequeño _(hasta 2kg)_ — S/5\n"
-            "3️⃣ Paquete mediano _(2-10kg)_ — S/8\n"
-            "4️⃣ Paquete grande _(10-30kg)_ — S/12\n"
-            "5️⃣ Carga pesada _(+30kg)_ — A coordinar")
+            f"✅ *{paquetes_txt}*\n"
+            "📦 Tamaño/precio: *a coordinar con el conductor*\n\n"
+            "📸 *Envía una foto de tu encomienda*\n"
+            "_(Para que el conductor sepa qué va a transportar)_\n\n"
+            "O escribe *omitir* si no tienes foto ahora.\n\n"
+            "0️⃣ Volver atrás\n"
+            "*menu* Ir al inicio")
 
     elif estado == S_ENCOMIENDA_TAMANO:
         # Precio = equivalente a N pasajeros en colectivo
