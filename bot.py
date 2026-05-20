@@ -1112,13 +1112,6 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
     else:
         return
 
-    # Guardar servicio como pendiente
-    servicios_pendientes[numero_cliente] = {
-        "tipo": tipo,
-        "datos": d.copy(),
-        "conductores_notificados": list(CONDUCTORES.keys())
-    }
-
     # Enviar solo a conductores ACTIVOS (no pausados)
     conductores_disponibles = [n for n in CONDUCTORES.keys() if conductores_estado.get(n, True)]
     if not conductores_disponibles:
@@ -1126,6 +1119,15 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
             "😔 No hay conductores disponibles ahora.\n\nIntenta en unos minutos o escribe *menu*.")
         servicios_pendientes.pop(numero_cliente, None)
         return
+
+    # Guardar servicio como pendiente operativo
+    servicios_pendientes[numero_cliente] = {
+        "tipo": tipo,
+        "estado": "PENDIENTE_CONDUCTOR",
+        "datos": d.copy(),
+        "creado_en": time.time(),
+        "conductores_notificados": list(conductores_disponibles)
+    }
 
     # Envío PARALELO a todos los conductores (asyncio.gather = mucho más rápido)
     tareas = [enviar_mensaje(num_conductor, msg) for num_conductor in conductores_disponibles]
@@ -1453,6 +1455,10 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 await enviar_mensaje(numero, "❌ Este servicio ya fue tomado por otro conductor.")
                 return
 
+            if numero not in servicios_pendientes[numero_cliente_full].get("conductores_notificados", []):
+                await enviar_mensaje(numero, "❌ No puedes tomar este servicio porque no estás en la lista de conductores disponibles para esta solicitud.")
+                return
+
             # Marcar como tomado
             servicios_tomados.add(numero_cliente_full)
             servicio = servicios_pendientes.pop(numero_cliente_full)
@@ -1499,19 +1505,25 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             else:
                 # ENCOMIENDA / COLECTIVO / TURISMO — notificar inmediatamente
                 await enviar_mensaje(numero,
-                    f"✅ *¡Servicio asignado!*\n\n"
-                    f"📱 Cliente: +{numero_cliente_full}\n"
-                    f"👤 {servicio['datos'].get('nombre', 'N/A')}\n"
-                    f"📍 {servicio['datos'].get('recojo_texto') or servicio['datos'].get('colectivo_recojo') or servicio['datos'].get('enc_origen', 'N/A')}\n"
-                    f"🏁 {servicio['datos'].get('destino_texto') or servicio['datos'].get('colectivo_ruta') or servicio['datos'].get('enc_destino', 'N/A')}\n\n"
-                    f"Contáctalo directamente para coordinar.")
+                    f"✅ *Servicio asignado para ti*\n\n"
+                    f"🧾 Tipo: *{tipo_servicio}*\n"
+                    f"👤 Cliente: {servicio['datos'].get('nombre', 'N/A')}\n"
+                    f"📱 Teléfono: +{numero_cliente_full}\n"
+                    f"📍 Recojo: {servicio['datos'].get('recojo_texto') or servicio['datos'].get('colectivo_recojo') or servicio['datos'].get('enc_origen', 'N/A')}\n"
+                    f"🏁 Destino/Ruta: {servicio['datos'].get('destino_texto') or servicio['datos'].get('colectivo_ruta') or servicio['datos'].get('enc_destino', 'N/A')}\n"
+                    f"💳 Pago: {servicio['datos'].get('pago') or servicio['datos'].get('colectivo_pago') or 'A coordinar'}\n\n"
+                    f"Coordina directamente con el cliente.\n"
+                    f"Cuando termines escribe: *FIN*")
                 if servicio['datos'].get('enc_foto_id'):
                     await reenviar_imagen(numero, servicio['datos']['enc_foto_id'])
                 await enviar_mensaje(numero_cliente_full,
-                    f"🚖 *¡Conductor en camino!*\n\n"
-                    f"👤 {conductor['nombre']}\n"
-                    f"🚗 Placa: {conductor['placa']}\n"
+                    f"✅ *Conductor asignado*\n\n"
+                    f"👤 Conductor: *{conductor['nombre']}*\n"
+                    f"🚗 Placa: *{conductor['placa']}*\n"
                     f"📱 Contacto: +{numero}\n\n"
+                    f"🧾 Servicio: *{tipo_servicio}*\n"
+                    f"📍 Recojo: {servicio['datos'].get('recojo_texto') or servicio['datos'].get('colectivo_recojo') or servicio['datos'].get('enc_origen', 'N/A')}\n"
+                    f"🏁 Destino/Ruta: {servicio['datos'].get('destino_texto') or servicio['datos'].get('colectivo_ruta') or servicio['datos'].get('enc_destino', 'N/A')}\n\n"
                     f"El conductor te contactará en breve.\n"
                     f"Escribe *menu* para otra solicitud.")
                 if tipo_servicio == "TURISMO":
