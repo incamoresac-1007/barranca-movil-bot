@@ -1905,19 +1905,19 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         if texto == "1":
             sesion["estado"] = S_NOMBRE
             datos["servicio"] = "TAXI"
-            await enviar_mensaje(numero, "🙋 ¿Cuál es tu nombre?")
+            await enviar_mensaje(numero, "🙋 Escribe tu nombre y primer apellido.\nEjemplo: Ana Torres\n\nTambién puedes enviar un audio breve si prefieres.")
         elif texto == "2":
             sesion["estado"] = S_NOMBRE
             datos["servicio"] = "COLECTIVO"
-            await enviar_mensaje(numero, "🚌 ¡Genial! ¿Cuál es tu nombre?")
+            await enviar_mensaje(numero, "🚌 ¡Genial! Escribe tu nombre y primer apellido.\nEjemplo: Ana Torres\n\nTambién puedes enviar un audio breve si prefieres.")
         elif texto == "3":
             sesion["estado"] = S_NOMBRE
             datos["servicio"] = "ENCOMIENDA"
-            await enviar_mensaje(numero, "📦 ¡Perfecto! ¿Cuál es tu nombre?")
+            await enviar_mensaje(numero, "📦 ¡Perfecto! Escribe tu nombre y primer apellido.\nEjemplo: Ana Torres\n\nTambién puedes enviar un audio breve si prefieres.")
         elif texto == "4":
             sesion["estado"] = S_NOMBRE
             datos["servicio"] = "TURISMO"
-            await enviar_mensaje(numero, "🗺️ ¡Genial! ¿Cuál es tu nombre?")
+            await enviar_mensaje(numero, "🗺️ ¡Genial! Escribe tu nombre y primer apellido.\nEjemplo: Ana Torres\n\nTambién puedes enviar un audio breve si prefieres.")
         elif texto == "0":
             sesiones.pop(numero, None)
             historial_ia.pop(numero, None)
@@ -2005,10 +2005,16 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     # ══ NOMBRE ════════════════════════════════════════════════════════════════
     elif estado == S_NOMBRE:
-        if len(texto) < 2:
-            await enviar_mensaje(numero, "Por favor escribe tu nombre.")
+        nombre_normalizado = normalizar_nombre_persona(texto)
+        partes_nombre = [p for p in nombre_normalizado.split() if p]
+
+        if len(partes_nombre) < 2:
+            await enviar_mensaje(numero,
+                "Por favor escribe tu nombre y primer apellido.\n"
+                "Ejemplo: Ana Torres")
             return
-        datos["nombre"] = normalizar_nombre_persona(texto).title()
+
+        datos["nombre"] = nombre_normalizado
         servicio = datos.get("servicio")
         if servicio == "TAXI":
             sesion["estado"] = S_CUANDO
@@ -2032,7 +2038,9 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             sesion["estado"] = S_ENCOMIENDA_DESC
             await enviar_mensaje(numero,
                 f"👍 Hola *{datos['nombre']}*!\n\n"
-                "📦 ¿Qué vas a enviar?\n_(ej: ropa, documentos, paquete)_")
+                "📦 ¿Qué vas a enviar?\n"
+                "Puedes escribirlo o enviar un audio breve.\n"
+                "_Ejemplo: una silla de oficina de 20 kilos_")
         elif servicio == "TURISMO":
             sesion["estado"] = S_TURISMO_DESTINO
             await enviar_mensaje(numero, f"👍 Hola *{datos['nombre']}*!\n\n" + MSG_TURISMO_OPCIONES)
