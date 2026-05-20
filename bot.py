@@ -2588,6 +2588,9 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         if es_gas:
             productos_detectados.append("Balón de gas lleno" if "lleno" in desc_l else "Balón de gas")
 
+        if any(w in desc_l for w in ["canasta", "canastas", "viveres", "víveres"]):
+            productos_detectados.append("Canasta de víveres")
+
         if es_bebida:
             if "caja" in desc_l or "cajas" in desc_l:
                 productos_detectados.append("Caja de cervezas/bebidas")
@@ -2596,7 +2599,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
         # Cantidad explicita: "2 cajas", "3 bolsas", etc.
         m_n = _re.search(
-            r'\b(\d+)\s*(balon|balones|balón|balones|costal|costales|paquete|paquetes|caja|cajas|bolsa|bolsas|bolson|bolsones|bulto|bultos|maleta|maletas|saco|sacos|silla|sillas|mesa|mesas|mueble|muebles)\b',
+            r'\b(\d+)\s*(balon|balones|balón|balones|canasta|canastas|costal|costales|paquete|paquetes|caja|cajas|bolsa|bolsas|bolson|bolsones|bulto|bultos|maleta|maletas|saco|sacos|silla|sillas|mesa|mesas|mueble|muebles)\b',
             desc_l
         )
         if m_n:
@@ -2605,7 +2608,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
         # Cantidad por objetos singulares: "un balón ... y una caja ..."
         objetos_singulares = _re.findall(
-            r'\b(?:un|una|1)\s+(balon|balón|caja|bolsa|paquete|bulto|maleta|saco|silla|mesa|mueble|costal)\b',
+            r'\b(?:un|una|1)\s+(balon|balón|canasta|caja|bolsa|paquete|bulto|maleta|saco|silla|mesa|mueble|costal)\b',
             desc_l
         )
         if auto_paquetes is None and len(objetos_singulares) >= 2:
@@ -2621,7 +2624,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         if auto_paquetes is None and any(w in desc_l for w in [
             "silla", "mesa", "televisor", "tv", "monitor", "cpu", "impresora",
             "mueble", "colchon", "bicicleta", "caja", "maleta", "mochila",
-            "costal", "bolsa", "paquete", "balon", "balón"
+            "costal", "bolsa", "paquete", "canasta", "canastas", "viveres", "víveres", "balon", "balón"
         ]):
             auto_paquetes = 1
 
@@ -2685,6 +2688,9 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             ) + "\n"
         elif len(productos_detectados) == 1:
             productos_bloque = f"Producto detectado: {productos_detectados[0]}\n"
+
+        if auto_paquetes and len(productos_detectados) > auto_paquetes:
+            auto_paquetes = min(len(productos_detectados), 4)
 
         if auto_paquetes and auto_tamano:
             nombre_tam, equiv_pas, req_conf = auto_tamano
