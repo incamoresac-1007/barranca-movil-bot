@@ -290,6 +290,65 @@ COLECTIVO_HORARIOS = {
 }
 COLECTIVO_MAX_ASIENTOS = 4
 
+TARIFA_MINIMA_TAXI_PROGRAMADO = 6.00
+
+
+def aplicar_tarifa_minima_programada(datos: dict):
+    """
+    Para taxis programados, evita tarifas demasiado bajas.
+    Regla: taxi programado urbano mínimo S/6.
+    No aplica a colectivo, encomienda ni turismo.
+    """
+    if not isinstance(datos, dict):
+        return
+
+    servicio = str(datos.get("servicio", "") or datos.get("tipo_servicio", "")).upper()
+    if servicio and servicio != "TAXI":
+        return
+
+    # Detectar si el servicio no es "ahora mismo"
+    valores_programacion = [
+        datos.get("horario"),
+        datos.get("hora_programada"),
+        datos.get("fecha_programada"),
+        datos.get("programado"),
+        datos.get("tipo_tiempo"),
+        datos.get("reserva_tipo"),
+    ]
+
+    combinado = " ".join(str(x or "") for x in valores_programacion).lower()
+
+    es_programado = False
+    if datos.get("programado") is True:
+        es_programado = True
+    if datos.get("hora_programada") or datos.get("fecha_programada"):
+        es_programado = True
+    if "program" in combinado or "reserva" in combinado or "indicar hora" in combinado:
+        es_programado = True
+    if combinado and "ahora" not in combinado and "inmediato" not in combinado:
+        # Si existe horario y no es "ahora", lo tratamos como programado.
+        if datos.get("horario") or datos.get("tipo_tiempo"):
+            es_programado = True
+
+    if not es_programado:
+        return
+
+    try:
+        tarifa = float(datos.get("tarifa") or 0)
+    except Exception:
+        return
+
+    if 0 < tarifa < TARIFA_MINIMA_TAXI_PROGRAMADO:
+        datos["tarifa_original"] = tarifa
+        datos["tarifa"] = TARIFA_MINIMA_TAXI_PROGRAMADO
+        aplicar_tarifa_minima_programada(datos)
+        datos["tarifa_aviso"] = (
+            f"📌 Tarifa mínima por servicio programado: S/{TARIFA_MINIMA_TAXI_PROGRAMADO:.2f}\n"
+        )
+        datos["observacion_tarifa"] = "Tarifa mínima por servicio programado"
+
+
+
 PROMO_TOPE = 7.00
 PROMO_CODIGO = "PROMO_PRIMER_SERVICIO_URBANO"
 
@@ -2554,7 +2613,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             f"👤 {datos['nombre']}\n"
             f"{linea_tiempo}"
             f"📍 {datos['recojo_texto']}\n"
-            f"🏁 {datos['destino_texto']}\n💰 S/{datos['tarifa']}\n💳 {datos['pago']}\n\n"
+            f"🏁 {datos['destino_texto']}\n💰 S/{datos['tarifa']}\n"f"{datos.get('tarifa_aviso','')}"f"💳 {datos['pago']}\n\n"
             "1️⃣ *REGISTRAR CUPO* ✅\n2️⃣ *CANCELAR* ❌" + NAV)
 
     elif estado == S_CONFIRMAR:
