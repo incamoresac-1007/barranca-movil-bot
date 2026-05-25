@@ -255,7 +255,28 @@ calificacion_pendiente: set[str] = set()  # números con calificación ya progra
 historial_viajes: dict[str, list] = {}  # historial de viajes por número
 ultima_actividad: dict[str, float] = {}  # timestamp última actividad por número
 # Estado conductor: True=activo/disponible, False=pausado
-conductores_estado: dict[str, bool] = {k: True for k in ["51992995140","51901258690","51900817214","51936882776","51940197110"]}
+conductores_estado: dict[str, bool] = {k: False for k in ["51992995140","51901258690","51900817214","51936882776","51940197110"]}
+
+def telefono_sin_51(numero: str) -> str:
+    n = str(numero or "").strip()
+    return n[2:] if n.startswith("51") and len(n) == 11 else n
+
+
+async def actualizar_estado_conductor_sheets(numero: str, estado: str):
+    """
+    Sincroniza el estado real del conductor con Google Sheets.
+    """
+    try:
+        info = CONDUCTORES.get(numero, {})
+        await sheets_evento("update_conductor", {
+            "TELEFONO": telefono_sin_51(numero),
+            "CONDUCTOR": info.get("nombre", ""),
+            "PLACA": info.get("placa", ""),
+            "ESTADO": estado
+        })
+    except Exception as e:
+        print(f"[CONDUCTOR SHEETS ERROR] {numero} {estado}: {e}", flush=True)
+
 # Viajes activos por conductor {num_conductor: num_cliente}
 viajes_activos: dict[str, str] = {}
 # Tipo de servicio activo por conductor {num_conductor: tipo}
@@ -1412,7 +1433,7 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
     conductores_disponibles = [n for n in CONDUCTORES.keys() if conductores_estado.get(n, True)]
     if not conductores_disponibles:
         await enviar_mensaje(numero_cliente,
-            "😔 No hay conductores disponibles ahora.\n\nIntenta en unos minutos o escribe *menu*.")
+            "😔 No hay conductores activos disponibles ahora.\n\nIntenta en unos minutos o escribe *menu*.")
         servicios_pendientes.pop(numero_cliente, None)
         return
 
@@ -2092,6 +2113,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
         if txt_up in ["PAUSAR", "PAUSA"]:
             conductores_estado[numero] = False
+            await actualizar_estado_conductor_sheets(numero, "PAUSADO")
             await enviar_mensaje(numero,
                 f"⏸️ *{conductor_info['nombre']}* — PAUSADO\n\n"
                 "No recibirás nuevos servicios.\n"
@@ -2100,6 +2122,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
         if txt_up in ["ACTIVAR", "ACTIVO"]:
             conductores_estado[numero] = True
+            await actualizar_estado_conductor_sheets(numero, "ACTIVO")
             await enviar_mensaje(numero,
                 f"✅ *{conductor_info['nombre']}* — ACTIVO\n\n"
                 "Ya recibirás nuevos servicios.\n"
