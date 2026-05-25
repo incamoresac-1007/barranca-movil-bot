@@ -93,7 +93,7 @@ async def startup():
     # Renovador desactivado: WHATSAPP_TOKEN debe venir desde Render Environment.
     # asyncio.create_task(renovar_token())
     asyncio.create_task(limpiar_sesiones())
-    print("[BOT] Renovador de token iniciado - renueva cada 23h", flush=True)
+    print("[BOT] Renovador de token DESACTIVADO - usando WHATSAPP_TOKEN de Render Environment", flush=True)
     print("[BOT] Limpiador de sesiones iniciado - cada 1h", flush=True)
 
 # ── Navegación ───────────────────────────────────────────────────────────────
