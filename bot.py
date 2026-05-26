@@ -1361,6 +1361,60 @@ VIDEOS_TURISMO = {
     "5": ("⭐ *Caral + Supe Pueblo*",     "https://youtu.be/fdE0wCsDOrc"),
     "6": None,  # destino personalizado, sin video
 }
+
+
+async def obtener_conductores_activos_desde_sheets():
+    """
+    Lee la hoja CONDUCTORES desde Apps Script.
+    Solo devuelve conductores con ESTADO = ACTIVO.
+    Google Sheets es la fuente de verdad.
+    """
+    webhook_url = os.getenv("SHEETS_WEBHOOK_URL", "")
+    if not webhook_url:
+        print("[CONDUCTORES] SHEETS_WEBHOOK_URL no configurado", flush=True)
+        return []
+
+    payload = {
+        "action": "get_conductores_activos"
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            r = await client.post(webhook_url, json=payload)
+
+        if r.status_code >= 400:
+            print(f"[CONDUCTORES ERROR] HTTP {r.status_code}: {r.text[:300]}", flush=True)
+            return []
+
+        resp = r.json()
+
+        if not resp.get("ok"):
+            print(f"[CONDUCTORES ERROR] Respuesta inválida: {resp}", flush=True)
+            return []
+
+        conductores = resp.get("conductores", []) or []
+        print(f"[CONDUCTORES] activos desde Sheets: {len(conductores)}", flush=True)
+
+        activos = []
+        for c in conductores:
+            telefono = str(c.get("telefono", "")).strip()
+            if not telefono:
+                continue
+
+            activos.append({
+                "telefono": telefono,
+                "nombre": c.get("nombre", ""),
+                "placa": c.get("placa", ""),
+                "estado": c.get("estado", "ACTIVO")
+            })
+
+        return activos
+
+    except Exception as e:
+        print(f"[CONDUCTORES ERROR] No se pudo consultar Sheets: {e}", flush=True)
+        return []
+
+
 async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "TAXI"):
     """Envía solicitud a todos los conductores individualmente.
     El primero en responder ACEPTO se lleva el servicio."""
@@ -1430,7 +1484,11 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
         return
 
     # Enviar solo a conductores ACTIVOS (no pausados)
-    conductores_disponibles = [n for n in CONDUCTORES.keys() if conductores_estado.get(n, True)]
+    conductores_activos_sheets = await obtener_conductores_activos_desde_sheets()
+    conductores_disponibles = [c["telefono"] for c in conductores_activos_sheets if c.get("telefono")]
+    conductores_por_numero_sheets = {
+        c["telefono"]: c for c in conductores_activos_sheets if c.get("telefono")
+    }
     if not conductores_disponibles:
         await enviar_mensaje(numero_cliente,
             "😔 No hay conductores activos disponibles ahora.\n\nIntenta en unos minutos o escribe *menu*.")
