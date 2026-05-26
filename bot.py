@@ -633,7 +633,7 @@ async def registrar_turismo_sheets(datos_turismo: dict):
             "pasajeros_extra": datos_turismo.get("turismo_pasajeros_extra", ""),
         }
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(webhook_url, json=payload)
+            r = await client.post(webhook_url, json=payload, follow_redirects=True)
             print(f"[SHEETS] Registro turismo: {r.status_code}", flush=True)
     except Exception as e:
         print(f"[SHEETS ERROR] {e}", flush=True)
@@ -740,7 +740,7 @@ async def sheets_evento(action: str, data: dict):
             "data": data,
         }
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(webhook_url, json=payload)
+            r = await client.post(webhook_url, json=payload, follow_redirects=True)
             print(f"[SHEETS] {action}: {r.status_code} {r.text[:120]}", flush=True)
     except Exception as e:
         print(f"[SHEETS ERROR] {action}: {e}", flush=True)
