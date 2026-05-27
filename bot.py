@@ -589,6 +589,46 @@ async def enviar_mensaje(to: str, texto: str):
         return False
 
 
+
+
+async def enviar_template_inicio_turno(to: str):
+    """
+    Envía plantilla aprobada de WhatsApp para recordatorio de inicio de turno.
+    Plantilla Meta: inicio_turno_conductor
+    Idioma: Spanish (PER) => es_PE
+    """
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": "inicio_turno_conductor",
+            "language": {"code": "es_PE"}
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(url, headers=headers, json=payload)
+
+        if r.status_code >= 400:
+            print(f"[TEMPLATE ERROR] inicio_turno_conductor to={to} status={r.status_code} {r.text}", flush=True)
+            return False
+
+        print(f"[TEMPLATE] inicio_turno_conductor enviado to={to} status={r.status_code}", flush=True)
+        return True
+
+    except Exception as e:
+        print(f"[TEMPLATE EXCEPTION] inicio_turno_conductor to={to} error={e}", flush=True)
+        return False
+
+
 async def reenviar_imagen(to: str, media_id: str):
     """Reenvía una imagen recibida a otro número."""
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
