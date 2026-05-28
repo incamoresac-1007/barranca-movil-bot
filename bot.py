@@ -151,6 +151,22 @@ S_PROGRAMAR          = "PROGRAMAR"         # Fecha y hora programada
 S_RECURRENTE_DIAS    = "RECURRENTE_DIAS"   # Días de la semana
 S_RECURRENTE_HORA    = "RECURRENTE_HORA"   # Hora del viaje recurrente
 
+# ── Estados El Cuervo ─────────────────────────────────────────────────────────
+S_TRANSPORTE_MENU    = "TRANSPORTE_MENU"   # Submenú Barranca Móvil
+
+# Gastronomía
+S_GASTRO_LISTA       = "GASTRO_LISTA"      # Lista de restaurantes
+
+# Seguridad & Saneamiento
+S_SEG_SUBCATEGORIA   = "SEG_SUBCATEGORIA"  # Elige servicio
+S_SEG_DESCRIPCION    = "SEG_DESCRIPCION"   # Describe la necesidad
+S_SEG_UBICACION      = "SEG_UBICACION"     # Dirección
+S_SEG_URGENCIA       = "SEG_URGENCIA"      # Urgente o programado
+S_SEG_PROGRAMAR      = "SEG_PROGRAMAR"     # Fecha y hora si programado
+S_SEG_ESPERA_COT     = "SEG_ESPERA_COT"    # Esperando cotización de Marcos
+S_SEG_CONFIRMAR_COT  = "SEG_CONFIRMAR_COT" # Cliente acepta o rechaza cotización
+S_SEG_CALIFICAR      = "SEG_CALIFICAR"     # Calificación post servicio
+
 # ── Mapa estado → estado anterior ────────────────────────────────────────────
 ESTADO_ANTERIOR = {
     S_NOMBRE:               S_MENU,
@@ -196,6 +212,16 @@ ESTADO_ANTERIOR = {
     S_TURISMO_PAGO:         S_TURISMO_RECOJO,
     S_TURISMO_PASAJEROS:    S_TURISMO_PAGO,
     S_TURISMO_CONFIRMAR:    S_TURISMO_PASAJEROS,
+    # El Cuervo
+    S_TRANSPORTE_MENU:      S_MENU,
+    S_GASTRO_LISTA:         S_MENU,
+    S_SEG_SUBCATEGORIA:     S_MENU,
+    S_SEG_DESCRIPCION:      S_SEG_SUBCATEGORIA,
+    S_SEG_UBICACION:        S_SEG_DESCRIPCION,
+    S_SEG_URGENCIA:         S_SEG_UBICACION,
+    S_SEG_PROGRAMAR:        S_SEG_URGENCIA,
+    S_SEG_ESPERA_COT:       S_SEG_URGENCIA,
+    S_SEG_CONFIRMAR_COT:    S_SEG_ESPERA_COT,
 }
 
 # ── Prompt a reenviar cuando el usuario regresa ───────────────────────────────
@@ -229,6 +255,12 @@ PROMPT_VOLVER = {
     S_TURISMO_RECOJO:     "📍 *¿Desde dónde los recogemos?*\n• Comparte tu ubicación 📌\n• O escribe la dirección",
     S_TURISMO_PAGO:       "💳 *¿Cómo pagas?*\n1️⃣ Efectivo\n2️⃣ Yape",
     S_TURISMO_PASAJEROS:  "🔒 *Registro de pasajeros*\n\n¿Cuál es tu número de DNI? _(7-8 dígitos)_\nO escribe *omitir* para saltarlo.",
+    # El Cuervo
+    S_TRANSPORTE_MENU:    "🚖 *Elige tu servicio de transporte:*\n1️⃣ Taxi\n2️⃣ Colectivo compartido\n3️⃣ Envío de encomienda 📦\n4️⃣ Ruta turística 🗺️\n0️⃣ Volver",
+    S_SEG_SUBCATEGORIA:   "🛡️ *¿Qué servicio necesitas?*\n1️⃣ Extintores (venta/recarga)\n2️⃣ Señalización de seguridad\n3️⃣ Fumigación / Control de plagas\n4️⃣ Capacitación y Defensa Civil\n5️⃣ Otro\n0️⃣ Volver",
+    S_SEG_DESCRIPCION:    "📝 *Describe tu necesidad:*\n_(Escribe los detalles del servicio que requieres)_",
+    S_SEG_UBICACION:      "📍 *¿Cuál es la dirección del servicio?*\n• Comparte tu ubicación 📌\n• O escribe la dirección",
+    S_SEG_URGENCIA:       "⏰ *¿Con qué urgencia necesitas el servicio?*\n1️⃣ Urgente — lo antes posible\n2️⃣ Programar — elegir fecha y hora\n0️⃣ Volver",
 }
 
 sesiones: dict[str, dict] = {}
@@ -429,22 +461,78 @@ def aplicar_promo_monto(datos: dict, monto: float, servicio: str) -> tuple[float
 
 
 
-SYSTEM_PROMPT_IA = """Eres el asistente de Barranca Móvil, servicio de taxis, encomiendas y turismo en Barranca, Perú.
-Servicios: TAXI urbano (S/3+S/1.20/km), interdistrital fijo, ENCOMIENDA local, TURISMO (Paramonga S/35, Caral S/60, Playas S/25, Huacho S/50).
-Pago: Efectivo o Yape. Responde en español, amigable, máximo 3 oraciones."""
+# ── Proveedores Seguridad & Saneamiento ──────────────────────────────────────
+PROVEEDORES_SEG = {
+    "51960459741": {
+        "nombre":    "Marcos Espinoza",
+        "negocio":   "SASI SAC",
+        "servicios": ["extintores", "señalización", "fumigación", "capacitación", "defensa civil"],
+        "horario":   {"inicio": 8, "fin": 18},   # 8am–6pm, flexible con clientes
+        "cobertura": "Barranca y distritos, Huacho y distritos",
+    },
+}
 
-MSG_BIENVENIDA = """👋 ¡Hola! Soy *Elizabeth*, tu asistente de *Barranca Móvil* 🚖🌊
+# Solicitudes de seguridad pendientes de cotización {num_cliente: datos_solicitud}
+solicitudes_seg_pendientes: dict[str, dict] = {}
+# Cotizaciones enviadas por proveedor pendientes de respuesta cliente {num_cliente: datos_cotizacion}
+cotizaciones_seg_pendientes: dict[str, dict] = {}
 
-Estoy aquí para ayudarte con lo que necesites.
+HORARIO_LIMA = "America/Lima"
+
+def dentro_horario_seg() -> bool:
+    """Verifica si estamos dentro del horario de Seguridad & Saneamiento (8am–6pm Lima)."""
+    try:
+        from datetime import datetime
+        import zoneinfo
+        ahora = datetime.now(zoneinfo.ZoneInfo(HORARIO_LIMA))
+        return 8 <= ahora.hour < 18
+    except Exception:
+        return True  # Si falla, dejamos pasar
+
+SEG_SUBCATEGORIAS = {
+    "1": "Extintores (venta/recarga)",
+    "2": "Señalización de seguridad",
+    "3": "Fumigación / Control de plagas",
+    "4": "Capacitación y Defensa Civil",
+    "5": "Otro",
+}
+
+SYSTEM_PROMPT_IA = """Eres Elizabeth, asistente de *El Cuervo* 🦅 — red inteligente de servicios locales en Barranca, Perú.
+Servicios: TRANSPORTE (taxi, colectivo, encomiendas, turismo), GASTRONOMÍA (restaurantes, cevicherías), SEGURIDAD & SANEAMIENTO (extintores, fumigación, señalización, defensa civil).
+Responde en español amigable y natural, máximo 3 oraciones."""
+
+MSG_BIENVENIDA = """👋 ¡Hola! Soy *Elizabeth*, tu asistente de *El Cuervo* 🦅
+_Red inteligente de servicios locales en Barranca_
+
 ¿En qué te puedo ayudar hoy?
 
-1️⃣ Solicitar taxi
+1️⃣ 🚖 Transporte
+2️⃣ 🍽️ Gastronomía
+3️⃣ 🛡️ Seguridad & Saneamiento
+0️⃣ Salir
+
+O escribe tu consulta libremente 💬"""
+
+MSG_TRANSPORTE_MENU = """🚖 *Transporte — Barranca Móvil*
+
+¿Qué servicio necesitas?
+
+1️⃣ Taxi
 2️⃣ Colectivo compartido con recojo a domicilio 🚌
 3️⃣ Envío de encomienda 📦
 4️⃣ Ruta turística 🗺️
-0️⃣ Salir
+0️⃣ Volver al menú principal
 
-🎁 Promo de lanzamiento: *primer servicio de movilidad puede salirte GRATIS*.\nEscribe *promo* para consultar condiciones.\n\nO escribe tu consulta libremente 💬"""
+🎁 Promo de lanzamiento: *primer servicio puede salirte GRATIS*.
+Escribe *promo* para consultar condiciones."""
+
+MSG_GASTRO_PROXIMAMENTE = """🍽️ *Gastronomía — Próximamente*
+
+Estamos registrando los mejores restaurantes, cevicherías, chifas y más de Barranca.
+
+Muy pronto podrás pedir tu comida favorita sin salir de WhatsApp. 🙌
+
+Escribe *menu* para volver al inicio."""
 
 MSG_TARIFAS = """💰 *Tarifas Barranca Móvil*
 
@@ -687,6 +775,49 @@ def generar_id_servicio(numero_cliente: str, tipo: str) -> str:
     ts = datetime.now().strftime("%Y%m%d%H%M%S")
     prefijo = (tipo or "SRV")[:3].upper()
     return f"BM-{prefijo}-{sufijo}-{ts}"
+
+
+async def _notificar_proveedor_seg(numero_cliente: str, datos: dict):
+    """Notifica a Marcos Espinoza con los detalles de la solicitud de seg & saneamiento."""
+    num_marcos = list(PROVEEDORES_SEG.keys())[0]
+    nombre = datos.get("nombre", "Cliente")
+    tel    = telefono_sin_51(numero_cliente)
+    subcat = datos.get("seg_subcategoria", "")
+    desc   = datos.get("seg_descripcion", "")
+    ubic   = datos.get("seg_ubicacion", "")
+    urgenc = datos.get("seg_urgencia", "URGENTE")
+    fecha  = datos.get("seg_fecha_programada", "")
+
+    solicitudes_seg_pendientes[numero_cliente] = datos.copy()
+
+    msg = (
+        f"🦅 *El Cuervo — Nueva Solicitud*\n\n"
+        f"🛡️ *Seguridad & Saneamiento*\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"📋 Servicio: *{subcat}*\n"
+        f"👤 Cliente: {nombre}\n"
+        f"📱 Teléfono: +{tel}\n"
+        f"📝 Descripción: {desc}\n"
+        f"📍 Dirección: {ubic}\n"
+        f"⏰ Urgencia: *{urgenc}*\n"
+        f"{'📅 Fecha programada: ' + fecha + chr(10) if fecha else ''}"
+        f"━━━━━━━━━━━━━━━━\n\n"
+        f"Para cotizar responde:\n"
+        f"*COTIZO {tel} [monto] [descripción breve]*\n\n"
+        f"Ejemplo: COTIZO {tel} 150 recarga 3 extintores PQS 6kg"
+    )
+    await enviar_mensaje(num_marcos, msg)
+    # Notificar al cliente que se envió
+    await enviar_mensaje(numero_cliente,
+        f"✅ *¡Solicitud enviada!*\n\n"
+        f"🛡️ *{subcat}*\n"
+        f"📍 {ubic}\n\n"
+        f"Nuestro especialista *Marcos Espinoza / SASI SAC* revisará tu solicitud "
+        f"y te enviará una cotización en breve.\n\n"
+        f"⏳ Tiempo estimado de respuesta: *15–30 minutos*\n\n"
+        f"Escribe *menu* si necesitas otra cosa 🦅")
+
+
 
 
 def armar_sheets_servicio(numero_cliente: str, tipo: str, d: dict, estado: str, conductor: dict | None = None) -> dict:
@@ -2010,6 +2141,50 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         await enviar_mensaje(numero, formato_historial(numero))
         return
 
+    # ── Proveedor Seguridad responde COTIZO ──────────────────────────────────
+    if numero in PROVEEDORES_SEG and texto.upper().startswith("COTIZO"):
+        partes = texto.strip().split(maxsplit=3)
+        # Formato: COTIZO [tel_cliente] [monto] [descripcion]
+        if len(partes) >= 3:
+            tel_raw    = partes[1].replace("+51","").replace("51","",1) if partes[1].startswith("+51") or (partes[1].startswith("51") and len(partes[1])==11) else partes[1]
+            num_cliente = tel_raw if tel_raw.startswith("51") else f"51{tel_raw}"
+            monto_str  = partes[2]
+            descripcion = partes[3] if len(partes) >= 4 else ""
+            proveedor  = PROVEEDORES_SEG[numero]
+
+            if num_cliente not in solicitudes_seg_pendientes:
+                await enviar_mensaje(numero,
+                    f"❌ No encontré solicitud activa para el número {tel_raw}.\n"
+                    f"Verifica el número e intenta de nuevo.")
+                return
+
+            cotizaciones_seg_pendientes[num_cliente] = {
+                "monto":       monto_str,
+                "descripcion": descripcion,
+                "proveedor":   proveedor["nombre"],
+            }
+            sesiones[num_cliente] = {
+                "estado": S_SEG_CONFIRMAR_COT,
+                "datos":  sesiones.get(num_cliente, {}).get("datos", solicitudes_seg_pendientes.get(num_cliente, {}))
+            }
+            await enviar_mensaje(numero,
+                f"✅ Cotización enviada al cliente. Esperando respuesta.")
+            await enviar_mensaje(num_cliente,
+                f"💰 *Cotización recibida — {proveedor['negocio']}*\n\n"
+                f"🛡️ Servicio: {sesiones[num_cliente]['datos'].get('seg_subcategoria','')}\n"
+                f"💵 Monto: *S/{monto_str}*\n"
+                f"{'📝 ' + descripcion + chr(10) if descripcion else ''}\n"
+                f"━━━━━━━━━━━━━━━━\n\n"
+                f"¿Deseas aceptar esta cotización?\n\n"
+                f"1️⃣ ✅ Aceptar\n"
+                f"2️⃣ ❌ Rechazar")
+        else:
+            await enviar_mensaje(numero,
+                "⚠️ Formato incorrecto. Usa:\n"
+                "*COTIZO [teléfono_cliente] [monto] [descripción breve]*\n\n"
+                "Ejemplo: COTIZO 987654321 150 recarga 3 extintores 6kg")
+        return
+
     # ── Conductor responde ACEPTO (con sinónimos) ────────────────────────────
     SINONIMOS_ACEPTO = {"listo","si","sí","ok","dale","voy","ya","tomo","vamos"}
     txt_norm = texto.strip().lower()
@@ -2492,7 +2667,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         if puntuacion >= 4:
             respuesta_final = (f"🙏 *¡Gracias por tu calificación!*\n\n"
                                f"Nos alegra que hayas tenido una buena experiencia.\n"
-                               f"Te esperamos pronto en *Barranca Móvil* 🚖"
+                               f"Te esperamos pronto en *El Cuervo* 🦅"
                                f"{OPCIONES_FINAL}")
         else:
             respuesta_final = (f"🙏 *Gracias por tu opinión.*\n\n"
@@ -2501,8 +2676,52 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                                f"{OPCIONES_FINAL}")
         await enviar_mensaje(numero, respuesta_final)
 
-    # ══ MENU ══════════════════════════════════════════════════════════════════
+    # ══ MENU CENTRAL EL CUERVO ════════════════════════════════════════════════
     elif estado == S_MENU:
+        if texto == "1":
+            sesion["estado"] = S_TRANSPORTE_MENU
+            await enviar_mensaje(numero, MSG_TRANSPORTE_MENU)
+        elif texto == "2":
+            sesion["estado"] = S_GASTRO_LISTA
+            await enviar_mensaje(numero, MSG_GASTRO_PROXIMAMENTE)
+        elif texto == "3":
+            if not dentro_horario_seg():
+                await enviar_mensaje(numero,
+                    "🛡️ *Seguridad & Saneamiento*\n\n"
+                    "⏰ Nuestro proveedor atiende de *8:00 am a 6:00 pm*.\n\n"
+                    "Escríbenos mañana en ese horario y con gusto te ayudamos 🙌\n\n"
+                    "Escribe *menu* para volver al inicio.")
+                return
+            sesion["estado"] = S_SEG_SUBCATEGORIA
+            await enviar_mensaje(numero,
+                "🛡️ *Seguridad & Saneamiento*\n\n"
+                "¿Qué servicio necesitas?\n\n"
+                "1️⃣ Extintores (venta / recarga)\n"
+                "2️⃣ Señalización de seguridad\n"
+                "3️⃣ Fumigación / Control de plagas\n"
+                "4️⃣ Capacitación y Defensa Civil\n"
+                "5️⃣ Otro servicio\n"
+                "0️⃣ Volver al menú principal" + NAV)
+        elif texto == "0":
+            sesiones.pop(numero, None)
+            historial_ia.pop(numero, None)
+            await enviar_mensaje(numero,
+                "👋 *¡Hasta pronto!*\n\n"
+                "Cuando necesites algo escribe *hola* o *menu*.\n\n"
+                "_El Cuervo — servicios locales siempre a tu disposición_ 🦅")
+        else:
+            resp = await respuesta_ia(numero, texto)
+            datos["ultima_consulta"] = texto
+            datos["ultima_respuesta"] = resp
+            sesion["estado"] = S_CONSULTA_OPCION
+            await enviar_mensaje(numero,
+                f"{resp}\n\n━━━━━━━━━━━━━━━━━━\n"
+                "¿Qué deseas hacer?\n\n"
+                "1️⃣ Hacer una solicitud ahora\n"
+                "2️⃣ Hablar con un operador 👤")
+
+    # ══ TRANSPORTE (Barranca Móvil) ═══════════════════════════════════════════
+    elif estado == S_TRANSPORTE_MENU:
         if texto_es_promo(texto):
             datos["promo_activa"] = True
             datos["promo_codigo"] = PROMO_CODIGO
@@ -2520,7 +2739,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "1️⃣ Taxi urbano\n"
                 "2️⃣ Colectivo compartido\n"
                 "3️⃣ Envío de encomienda\n"
-                "0️⃣ Salir")
+                "0️⃣ Volver")
             return
 
         if texto == "1":
@@ -2546,12 +2765,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             datos["servicio"] = "TURISMO"
             await enviar_mensaje(numero, "🗺️ ¡Genial! Escribe tu nombre y primer apellido.\nEjemplo: Ana Torres\n\nTambién puedes enviar un audio breve si prefieres.")
         elif texto == "0":
-            sesiones.pop(numero, None)
-            historial_ia.pop(numero, None)
-            await enviar_mensaje(numero,
-                "👋 *¡Hasta pronto!*\n\n"
-                "Cuando necesites un servicio escribe *hola* o *menu*.\n\n"
-                "_Barranca Móvil — siempre a tu servicio_ 🚖")
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            await enviar_mensaje(numero, MSG_BIENVENIDA)
         else:
             resp = await respuesta_ia(numero, texto)
             datos["ultima_consulta"] = texto
@@ -2562,6 +2777,151 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "¿Qué deseas hacer?\n\n"
                 "1️⃣ Hacer una solicitud ahora\n"
                 "2️⃣ Hablar con un operador 👤")
+
+    # ══ GASTRONOMÍA (placeholder) ═════════════════════════════════════════════
+    elif estado == S_GASTRO_LISTA:
+        sesiones[numero] = {"estado": S_MENU, "datos": {}}
+        await enviar_mensaje(numero, MSG_GASTRO_PROXIMAMENTE)
+
+    # ══ SEGURIDAD & SANEAMIENTO ════════════════════════════════════════════════
+    elif estado == S_SEG_SUBCATEGORIA:
+        if texto not in SEG_SUBCATEGORIAS and texto != "0":
+            await enviar_mensaje(numero,
+                "Por favor elige una opción del *1* al *5*, o *0* para volver." + NAV)
+            return
+        if texto == "0":
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            await enviar_mensaje(numero, MSG_BIENVENIDA)
+            return
+        datos["seg_subcategoria"] = SEG_SUBCATEGORIAS[texto]
+        sesion["estado"] = S_SEG_DESCRIPCION
+        await enviar_mensaje(numero,
+            f"📋 *{SEG_SUBCATEGORIAS[texto]}*\n\n"
+            "Describe brevemente tu necesidad.\n"
+            "_(Ej: necesito recargar 3 extintores de 6kg para mi negocio)_" + NAV)
+
+    elif estado == S_SEG_DESCRIPCION:
+        if not texto or len(texto) < 5:
+            await enviar_mensaje(numero, "Por favor escribe una descripción más detallada 📝" + NAV)
+            return
+        datos["seg_descripcion"] = texto
+        sesion["estado"] = S_SEG_UBICACION
+        await enviar_mensaje(numero,
+            "📍 *¿Cuál es la dirección donde se realizará el servicio?*\n"
+            "• Comparte tu ubicación 📌\n"
+            "• O escribe la dirección completa" + NAV)
+
+    elif estado == S_SEG_UBICACION:
+        if lat and lng:
+            datos["seg_ubicacion"] = f"📌 Coordenadas: {lat},{lng}"
+            datos["seg_lat"] = lat
+            datos["seg_lng"] = lng
+        elif texto and len(texto) >= 5:
+            datos["seg_ubicacion"] = texto
+        else:
+            await enviar_mensaje(numero,
+                "Por favor comparte tu ubicación o escribe la dirección." + NAV)
+            return
+        sesion["estado"] = S_SEG_URGENCIA
+        await enviar_mensaje(numero,
+            "⏰ *¿Con qué urgencia necesitas el servicio?*\n\n"
+            "1️⃣ Urgente — lo antes posible\n"
+            "2️⃣ Programar — elegir fecha y hora\n"
+            "0️⃣ Volver" + NAV)
+
+    elif estado == S_SEG_URGENCIA:
+        if texto == "0":
+            sesion["estado"] = S_SEG_UBICACION
+            await enviar_mensaje(numero, PROMPT_VOLVER[S_SEG_UBICACION] + NAV)
+            return
+        if texto not in ["1", "2"]:
+            await enviar_mensaje(numero, "Responde *1* Urgente o *2* Programar, o *0* para volver." + NAV)
+            return
+        datos["seg_urgencia"] = "URGENTE" if texto == "1" else "PROGRAMADO"
+        if texto == "2":
+            sesion["estado"] = S_SEG_PROGRAMAR
+            await enviar_mensaje(numero,
+                "📅 *¿Para cuándo necesitas el servicio?*\n"
+                "_(Ej: mañana a las 10am / 30 de mayo a las 3pm)_" + NAV)
+        else:
+            # Urgente: notificar a Marcos y esperar cotización
+            await _notificar_proveedor_seg(numero, datos)
+            sesion["estado"] = S_SEG_ESPERA_COT
+
+    elif estado == S_SEG_PROGRAMAR:
+        if not texto or len(texto) < 3:
+            await enviar_mensaje(numero, "Por favor escribe la fecha y hora del servicio." + NAV)
+            return
+        datos["seg_fecha_programada"] = texto
+        await _notificar_proveedor_seg(numero, datos)
+        sesion["estado"] = S_SEG_ESPERA_COT
+
+    elif estado == S_SEG_ESPERA_COT:
+        # El cliente puede preguntar el estado o esperar
+        await enviar_mensaje(numero,
+            "⏳ *Aún estamos esperando la cotización de nuestro especialista.*\n\n"
+            "Te notificaremos en cuanto tengamos una respuesta.\n\n"
+            "Escribe *menu* si deseas hacer otra consulta." + NAV)
+
+    elif estado == S_SEG_CONFIRMAR_COT:
+        if texto == "1":
+            # Cliente acepta cotización
+            cot = cotizaciones_seg_pendientes.pop(numero, {})
+            datos["seg_cotizacion_aceptada"] = cot.get("monto", "")
+            datos["seg_estado"] = "CONFIRMADO"
+            # Notificar a Marcos que fue aceptado
+            num_marcos = list(PROVEEDORES_SEG.keys())[0]
+            nombre_cliente = datos.get("nombre", "Cliente")
+            tel_cliente = telefono_sin_51(numero)
+            await enviar_mensaje(num_marcos,
+                f"✅ *¡Cotización ACEPTADA!*\n\n"
+                f"👤 Cliente: {nombre_cliente}\n"
+                f"📱 Teléfono: +{tel_cliente}\n"
+                f"🛡️ Servicio: {datos.get('seg_subcategoria','')}\n"
+                f"📍 Dirección: {datos.get('seg_ubicacion','')}\n"
+                f"💰 Monto aceptado: S/{cot.get('monto','')}\n"
+                f"⏰ Urgencia: {datos.get('seg_urgencia','')}\n"
+                f"{'📅 Fecha: ' + datos.get('seg_fecha_programada','') if datos.get('seg_fecha_programada') else ''}\n\n"
+                f"Coordina con el cliente para confirmar horario exacto.")
+            asyncio.create_task(sheets_evento("upsert_servicio", {
+                "FECHA":       datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "ID_SERVICIO": generar_id_servicio(numero, "SEG"),
+                "CATEGORIA":   "SEGURIDAD",
+                "SUBCATEGORIA": datos.get("seg_subcategoria",""),
+                "CLIENTE":     datos.get("nombre",""),
+                "TELEFONO":    telefono_sin_51(numero),
+                "DESCRIPCION": datos.get("seg_descripcion",""),
+                "UBICACION":   datos.get("seg_ubicacion",""),
+                "URGENCIA":    datos.get("seg_urgencia",""),
+                "PROVEEDOR":   "Marcos Espinoza / SASI SAC",
+                "MONTO":       cot.get("monto",""),
+                "ESTADO":      "CONFIRMADO",
+            }))
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            await enviar_mensaje(numero,
+                f"✅ *¡Servicio confirmado!*\n\n"
+                f"🛡️ *{datos.get('seg_subcategoria','')}*\n"
+                f"👷 Especialista: *Marcos Espinoza / SASI SAC*\n"
+                f"💰 Monto: *S/{cot.get('monto','')}*\n\n"
+                f"Marcos coordinará contigo los detalles finales.\n\n"
+                f"Escribe *menu* para volver al inicio 🦅")
+        elif texto == "2":
+            # Cliente rechaza cotización
+            cot = cotizaciones_seg_pendientes.pop(numero, {})
+            num_marcos = list(PROVEEDORES_SEG.keys())[0]
+            await enviar_mensaje(num_marcos,
+                f"❌ *Cotización rechazada*\n"
+                f"El cliente {datos.get('nombre','N/A')} no aceptó la cotización de S/{cot.get('monto','')}.")
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            await enviar_mensaje(numero,
+                "Entendido. Hemos notificado al especialista.\n\n"
+                "Si cambias de opinión o necesitas otro servicio, escribe *menu* 🦅")
+        else:
+            cot = cotizaciones_seg_pendientes.get(numero, {})
+            await enviar_mensaje(numero,
+                f"Por favor responde:\n\n"
+                f"1️⃣ Aceptar cotización (S/{cot.get('monto','')})\n"
+                f"2️⃣ Rechazar cotización")
 
     # ══ CONSULTA OPCION ═══════════════════════════════════════════════════════
     elif estado == S_CONSULTA_OPCION:
@@ -4258,4 +4618,4 @@ async def update_ticket_estado(ticket_id: str, body: dict):
 
 @app.get("/")
 async def root():
-    return {"status": "Barranca Movil Bot v5 activo 🚖"}
+    return {"status": "El Cuervo Bot v1.0 activo 🦅 | Barranca Móvil integrado 🚖"}
