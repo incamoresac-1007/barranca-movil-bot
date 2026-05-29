@@ -2813,7 +2813,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     elif estado == S_SEG_UBICACION:
         if lat and lng:
-            datos["seg_ubicacion"] = f"📌 Coordenadas: {lat},{lng}"
+            direccion = await coords_a_direccion(lat, lng)
+            datos["seg_ubicacion"] = direccion if direccion else f"📌 Coordenadas: {lat},{lng}"
             datos["seg_lat"] = lat
             datos["seg_lng"] = lng
         elif texto and len(texto) >= 5:
