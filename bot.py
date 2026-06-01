@@ -170,6 +170,18 @@ S_SEG_ESPERA_COT     = "SEG_ESPERA_COT"    # Esperando cotización de Marcos
 S_SEG_CONFIRMAR_COT  = "SEG_CONFIRMAR_COT" # Cliente acepta o rechaza cotización
 S_SEG_CALIFICAR      = "SEG_CALIFICAR"     # Calificación post servicio
 
+# Educación
+S_EDU_PARA_QUIEN     = "EDU_PARA_QUIEN"    # ¿para ti o para un menor a tu cargo?
+S_EDU_NOMBRE         = "EDU_NOMBRE"        # nombre del apoderado/solicitante
+S_EDU_ALUMNO         = "EDU_ALUMNO"        # nombre del alumno (si es menor)
+S_EDU_NIVEL          = "EDU_NIVEL"         # primaria/secundaria/preuniversitario
+S_EDU_MATERIA        = "EDU_MATERIA"       # materia/tema (texto libre)
+S_EDU_MODALIDAD      = "EDU_MODALIDAD"     # presencial / virtual
+S_EDU_DIRECCION      = "EDU_DIRECCION"     # dirección (solo presencial)
+S_EDU_HORAS          = "EDU_HORAS"         # cuántas horas
+S_EDU_CUANDO         = "EDU_CUANDO"        # cuándo (hoy/fecha + hora)
+S_EDU_CONFIRMAR      = "EDU_CONFIRMAR"     # resumen y confirmación
+
 # ── Mapa estado → estado anterior ────────────────────────────────────────────
 ESTADO_ANTERIOR = {
     S_NOMBRE:               S_MENU,
@@ -225,6 +237,17 @@ ESTADO_ANTERIOR = {
     S_SEG_PROGRAMAR:        S_SEG_URGENCIA,
     S_SEG_ESPERA_COT:       S_SEG_URGENCIA,
     S_SEG_CONFIRMAR_COT:    S_SEG_ESPERA_COT,
+    # Educación
+    S_EDU_PARA_QUIEN:       S_MENU,
+    S_EDU_NOMBRE:           S_EDU_PARA_QUIEN,
+    S_EDU_ALUMNO:           S_EDU_NOMBRE,
+    S_EDU_NIVEL:            S_EDU_ALUMNO,
+    S_EDU_MATERIA:          S_EDU_NIVEL,
+    S_EDU_MODALIDAD:        S_EDU_MATERIA,
+    S_EDU_DIRECCION:        S_EDU_MODALIDAD,
+    S_EDU_HORAS:            S_EDU_MODALIDAD,
+    S_EDU_CUANDO:           S_EDU_HORAS,
+    S_EDU_CONFIRMAR:        S_EDU_CUANDO,
 }
 
 # ── Prompt a reenviar cuando el usuario regresa ───────────────────────────────
@@ -264,6 +287,16 @@ PROMPT_VOLVER = {
     S_SEG_DESCRIPCION:    "📝 *Describe tu necesidad:*\n_(Escribe los detalles del servicio que requieres)_",
     S_SEG_UBICACION:      "📍 *¿Cuál es la dirección del servicio?*\n• Comparte tu ubicación 📌\n• O escribe la dirección",
     S_SEG_URGENCIA:       "⏰ *¿Con qué urgencia necesitas el servicio?*\n1️⃣ Urgente — lo antes posible\n2️⃣ Programar — elegir fecha y hora\n0️⃣ Volver",
+    # Educación
+    S_EDU_PARA_QUIEN:     "📚 *¿Para quién es la clase?*\n1️⃣ Para mí (soy mayor de edad)\n2️⃣ Para un menor a mi cargo\n0️⃣ Volver",
+    S_EDU_NOMBRE:         "🙋 *¿Cuál es tu nombre y apellido?* _(apoderado/solicitante)_",
+    S_EDU_ALUMNO:         "👦 *¿Nombre del alumno/a?*",
+    S_EDU_NIVEL:          "🎓 *¿Qué nivel?*\n1️⃣ Primaria\n2️⃣ Secundaria\n3️⃣ Preuniversitario",
+    S_EDU_MATERIA:        "📖 *¿Qué materia o tema necesita reforzar?*\n_(Ej: fracciones, álgebra, preparación examen)_",
+    S_EDU_MODALIDAD:      "💻 *¿Cómo prefieres la clase?*\n1️⃣ Presencial (el profe va a tu domicilio)\n2️⃣ Virtual (por Zoom)",
+    S_EDU_DIRECCION:      "📍 *¿Cuál es la dirección para la clase presencial?*\n• Comparte tu ubicación 📌\n• O escribe la dirección",
+    S_EDU_HORAS:          "⏱️ *¿Cuántas horas de clase?*\n_(Escribe el número, ej: 1, 2)_",
+    S_EDU_CUANDO:         "📅 *¿Para cuándo?*\n_(Ej: hoy 4pm, mañana 10am, viernes 6pm)_",
 }
 
 sesiones: dict[str, dict] = {}
@@ -283,6 +316,34 @@ CONDUCTORES = {
     "51936882776": {"nombre": "Fernando Urpeque",   "placa": "H3D-309"},
     "51940197110": {"nombre": "Marino Solorzano",    "placa": "BTE-605"},
 }
+
+# ── Profesores registrados (Educación) ────────────────────────────────────────
+# IMPORTANTE: da de alta SOLO profesores verificados (DNI + antecedentes).
+# Son ellos quienes podrán entrar a domicilios, muchas veces con menores.
+#   niveles:   PRIMARIA / SECUNDARIA / PREUNIVERSITARIO
+#   modalidad: presencial / virtual
+PROFESORES = {
+    # "51900000001": {"nombre": "Ejemplo Profesor",
+    #                 "niveles": ["PRIMARIA", "SECUNDARIA"],
+    #                 "modalidad": ["presencial", "virtual"]},
+}
+
+# Tarifas de Educación por HORA en soles. Edita estos montos cuando quieras.
+TARIFAS_EDU = {
+    "PRIMARIA":         15,
+    "SECUNDARIA":       25,
+    "PREUNIVERSITARIO": 35,
+}
+NIVEL_LABEL = {
+    "PRIMARIA": "Primaria",
+    "SECUNDARIA": "Secundaria",
+    "PREUNIVERSITARIO": "Preuniversitario",
+}
+
+# Clases pendientes de que un profesor acepte {numero_apoderado: {...}}
+clases_pendientes: dict[str, dict] = {}
+# Clases ya tomadas (evita doble asignación)
+clases_tomadas: set[str] = set()
 
 # Servicios pendientes de aceptación {numero_cliente: datos_servicio}
 servicios_pendientes: dict[str, dict] = {}
@@ -512,6 +573,7 @@ _Red inteligente de servicios locales en Barranca_
 1️⃣ 🚖 Transporte
 2️⃣ 🍽️ Gastronomía
 3️⃣ 🛡️ Seguridad & Saneamiento
+4️⃣ 📚 Educación
 0️⃣ Salir
 
 O escribe tu consulta libremente 💬"""
@@ -553,6 +615,34 @@ MSG_SEG_FUERA_HORARIO = (
     "⏰ Nuestro proveedor atiende de *8:00 am a 6:00 pm*.\n\n"
     "Escríbenos mañana en ese horario y con gusto te ayudamos 🙌\n\n"
     "Escribe *menu* para volver al inicio."
+)
+
+MSG_EDU_INTRO = (
+    "📚 *Educación — Reforzamiento escolar*\n\n"
+    "Profesores *verificados* que te ayudan con las clases, "
+    "presencial a domicilio o virtual por Zoom.\n\n"
+    "👨‍👩‍👧 *¿Para quién es la clase?*\n"
+    "1️⃣ Para mí (soy mayor de edad)\n"
+    "2️⃣ Para un menor a mi cargo\n"
+    "0️⃣ Volver al menú principal" + NAV
+)
+
+MSG_EDU_NIVEL = (
+    "🎓 *¿Qué nivel necesita el alumno/a?*\n\n"
+    "1️⃣ Primaria\n"
+    "2️⃣ Secundaria\n"
+    "3️⃣ Preuniversitario" + NAV
+)
+
+MSG_EDU_MODALIDAD = (
+    "💻 *¿Cómo prefieres la clase?*\n\n"
+    "1️⃣ Presencial — el profe va al domicilio 🏠\n"
+    "2️⃣ Virtual — por Zoom 💻" + NAV
+)
+
+MSG_EDU_HORAS = (
+    "⏱️ *¿Cuántas horas de clase?*\n"
+    "_(Escribe un número, ej: 1, 2)_" + NAV
 )
 
 MSG_TARIFAS = """💰 *Tarifas Barranca Móvil*
@@ -1757,6 +1847,14 @@ PALABRAS_INTENCION = {
         "defensa civil", "saneamiento", "capacitacion", "capacitación", "recarga de extintor",
         "control de plagas", "desinfecc", "desratiz", "fumigacion", "fumigación"
     ],
+    "EDUCACION": [
+        "clase", "clases", "profesor", "profesora", "profe", "reforzamiento", "refuerzo",
+        "tutoria", "tutoría", "nivelacion", "nivelación", "matematica", "matemática", "mates",
+        "tarea", "examen", "academia", "apoyo escolar", "ayuda con", "leccion", "lección",
+        "preuniversitario", "preu", "secundaria", "primaria", "estudiar", "aprender",
+        "comunicacion", "comunicación", "fisica", "física", "quimica", "química", "algebra",
+        "álgebra", "aritmetica", "aritmética", "razonamiento", "trigonometria", "trigonometría"
+    ],
 }
 
 
@@ -1786,8 +1884,9 @@ async def clasificar_intencion(texto: str) -> str:
         "TRANSPORTE = taxi, colectivo, encomienda o envío de paquetes, tours o turismo, movilidad en general.\n"
         "GASTRONOMIA = pedir comida, restaurantes, delivery de comida, antojos.\n"
         "SEGURIDAD = extintores, fumigación o control de plagas, señalización, defensa civil, saneamiento.\n"
+        "EDUCACION = clases particulares, reforzamiento escolar, profesor de matemática u otra materia, tutorías, apoyo con tareas o exámenes.\n"
         "CONSULTA = saludos, preguntas generales, dudas, o cualquier cosa que no encaje claramente en las anteriores.\n"
-        "Responde únicamente una de estas palabras: TRANSPORTE, GASTRONOMIA, SEGURIDAD, CONSULTA."
+        "Responde únicamente una de estas palabras: TRANSPORTE, GASTRONOMIA, SEGURIDAD, EDUCACION, CONSULTA."
     )
 
     def _groq():
@@ -1801,7 +1900,7 @@ async def clasificar_intencion(texto: str) -> str:
     try:
         completion = await asyncio.wait_for(asyncio.to_thread(_groq), timeout=3.0)
         raw = (completion.choices[0].message.content or "").strip().upper()
-        for cat in ("TRANSPORTE", "GASTRONOMIA", "SEGURIDAD", "CONSULTA"):
+        for cat in ("TRANSPORTE", "GASTRONOMIA", "SEGURIDAD", "EDUCACION", "CONSULTA"):
             if cat in raw:
                 return cat
     except (asyncio.TimeoutError, Exception):
@@ -1828,7 +1927,92 @@ async def enrutar_categoria(numero: str, sesion: dict, categoria: str, prefijo: 
         sesion["estado"] = S_SEG_SUBCATEGORIA
         await enviar_mensaje(numero, prefijo + MSG_SEG_SUBMENU)
         return True
+    if categoria == "EDUCACION":
+        sesion["estado"] = S_EDU_PARA_QUIEN
+        sesion["datos"] = {"servicio": "EDUCACION"}
+        await enviar_mensaje(numero, prefijo + MSG_EDU_INTRO)
+        return True
     return False
+
+
+def calcular_total_edu(nivel: str, horas: int) -> int:
+    """Total de la clase = tarifa por hora del nivel × horas (mínimo 1 hora)."""
+    return TARIFAS_EDU.get(nivel, 0) * max(1, int(horas or 1))
+
+
+async def notificar_profesores(sesion: dict, numero_apoderado: str):
+    """Despacha la solicitud de clase a los profesores que cubren el nivel y la
+    modalidad pedidos. Reusa el envío inteligente (texto libre / plantilla)."""
+    d = sesion["datos"]
+    nivel = d.get("edu_nivel", "PRIMARIA")
+    modalidad = d.get("edu_modalidad", "virtual")
+    total = d.get("edu_total", 0)
+    alumno = d.get("edu_alumno") or d.get("nombre", "Alumno")
+
+    candidatos = [
+        tel for tel, info in PROFESORES.items()
+        if nivel in info.get("niveles", []) and modalidad in info.get("modalidad", [])
+    ]
+
+    if not candidatos:
+        await enviar_mensaje(numero_apoderado,
+            "😔 *Por ahora no tenemos un profesor disponible* para ese nivel y modalidad.\n\n"
+            "Hemos registrado tu solicitud y te contactaremos apenas haya un profe disponible.\n\n"
+            "Escribe *menu* para volver al inicio.")
+        if "sheets_evento" in globals():
+            asyncio.create_task(sheets_evento("add_alerta", {
+                "id_servicio": f"EDU-SIN-PROFE-{int(time.time())}",
+                "tipo_alerta": "EDUCACION_SIN_PROFESOR",
+                "prioridad": "ALTA",
+                "descripcion": (f"Solicitud de clase sin profe disponible. Nivel={nivel} "
+                                f"Modalidad={modalidad} Apoderado=+{numero_apoderado} "
+                                f"Tema={d.get('edu_materia','')}"),
+                "requiere_accion": "SI",
+                "estado_alerta": "ABIERTA",
+                "responsable": "Operador"
+            }))
+        return
+
+    msg = (
+        f"📚 *NUEVA CLASE — {NIVEL_LABEL.get(nivel, nivel)}*\n\n"
+        f"👤 Apoderado: {d.get('nombre','N/A')} | 📱 +{numero_apoderado}\n"
+        f"🎓 Alumno: {alumno}\n"
+        f"📖 Tema: {d.get('edu_materia','reforzamiento')}\n"
+        f"💻 Modalidad: {'Presencial (domicilio)' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
+        + (f"📍 Dirección: {d.get('edu_direccion','')}\n" if modalidad == 'presencial' else "")
+        + f"⏱️ {d.get('edu_horas',1)} hora(s) | 📅 {d.get('edu_cuando','a coordinar')}\n"
+        f"💰 Total: S/{total}\n\n"
+        + ("⚠️ *Clase presencial:* el apoderado estará presente durante toda la clase.\n\n"
+           if modalidad == 'presencial' else "")
+        + f"Responde: *ACEPTO {numero_apoderado}*"
+    )
+
+    cliente_str = _limpiar_param_template(f"{d.get('nombre','Apoderado')} | +{numero_apoderado}")
+    detalle_corto = _limpiar_param_template(
+        f"{NIVEL_LABEL.get(nivel, nivel)} | {d.get('edu_materia','reforzamiento')} | "
+        f"{'Presencial' if modalidad=='presencial' else 'Virtual'} | "
+        f"{d.get('edu_horas',1)}h | S/{total}"
+    )
+
+    clases_pendientes[numero_apoderado] = {
+        "tipo": "EDUCACION",
+        "estado": "PENDIENTE_PROFESOR",
+        "datos": d.copy(),
+        "creado_en": time.time(),
+        "profesores_notificados": list(candidatos),
+    }
+
+    tareas = [
+        notificar_conductor_inteligente(tel, msg, "CLASE", cliente_str, detalle_corto, numero_apoderado)
+        for tel in candidatos
+    ]
+    await asyncio.gather(*tareas)
+
+    await enviar_mensaje(numero_apoderado,
+        "✅ *¡Solicitud enviada!*\n\n"
+        f"Estamos contactando a nuestros profesores de *{NIVEL_LABEL.get(nivel, nivel)}*.\n"
+        "Apenas uno acepte, te aviso con sus datos. 📚\n\n"
+        "Escribe *menu* para volver al inicio.")
 
 # ── Historial de viajes ──────────────────────────────────────────────────────
 def guardar_viaje(numero: str, datos: dict, tipo: str):
@@ -2423,6 +2607,80 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "Ejemplo: COTIZO 987654321 150 recarga 3 extintores 6kg")
         return
 
+    # ── Profesor responde ACEPTO (Educación) ─────────────────────────────────
+    if texto.upper().startswith("ACEPTO") and numero in PROFESORES:
+        partes = texto.strip().split()
+        if len(partes) >= 2:
+            num_ap = partes[1].replace("+", "")
+            num_ap_full = num_ap if num_ap.startswith("51") else f"51{num_ap}"
+
+            if num_ap_full not in clases_pendientes:
+                await enviar_mensaje(numero, "❌ Esta clase ya no está disponible.")
+                return
+            if num_ap_full in clases_tomadas:
+                await enviar_mensaje(numero, "❌ Esta clase ya fue tomada por otro profesor.")
+                return
+            if numero not in clases_pendientes[num_ap_full].get("profesores_notificados", []):
+                await enviar_mensaje(numero, "❌ No estás en la lista de profesores para esta clase.")
+                return
+
+            clases_tomadas.add(num_ap_full)
+            clase = clases_pendientes.pop(num_ap_full)
+            profe = PROFESORES[numero]
+            d = clase["datos"]
+            modalidad = d.get("edu_modalidad", "virtual")
+            nivel_lbl = NIVEL_LABEL.get(d.get("edu_nivel"), d.get("edu_nivel", ""))
+
+            # Avisar a los demás profes que ya se tomó
+            for tel in clase.get("profesores_notificados", []):
+                if tel != numero:
+                    await enviar_mensaje(tel,
+                        f"❌ *Clase tomada*\nLa clase de {d.get('edu_alumno','el alumno')} "
+                        f"ya fue tomada por otro profesor.")
+
+            # Confirmar al profesor con los datos del apoderado
+            await enviar_mensaje(numero,
+                f"✅ *¡Clase asignada para ti!*\n\n"
+                f"👤 Apoderado: {d.get('nombre','N/A')} | 📱 +{num_ap_full}\n"
+                f"🎓 Alumno: {d.get('edu_alumno','')}\n"
+                f"📚 Nivel: {nivel_lbl}\n"
+                f"📖 Tema: {d.get('edu_materia','')}\n"
+                f"💻 Modalidad: {'Presencial' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
+                + (f"📍 Dirección: {d.get('edu_direccion','')}\n" if modalidad == 'presencial' else "")
+                + f"⏱️ {d.get('edu_horas',1)} hora(s) | 📅 {d.get('edu_cuando','')}\n"
+                f"💰 Total: S/{d.get('edu_total',0)}\n\n"
+                + ("⚠️ El apoderado estará presente durante toda la clase.\n"
+                   "💡 Para trasladarte puedes pedir un taxi por este mismo bot. 🚖\n\n"
+                   if modalidad == 'presencial' else
+                   "Coordina el enlace de *Zoom* directamente con el apoderado.\n\n")
+                + "Contacta al apoderado para confirmar los detalles.")
+
+            # Notificar al apoderado con los datos del profesor
+            await enviar_mensaje(num_ap_full,
+                f"📚 *¡Profesor asignado!*\n\n"
+                f"👨‍🏫 {profe.get('nombre','Profesor verificado')}\n"
+                f"📱 Contacto: +{numero}\n"
+                f"📖 {d.get('edu_materia','')} — {nivel_lbl}\n"
+                f"💻 {'Presencial (domicilio)' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
+                f"📅 {d.get('edu_cuando','')}\n"
+                f"💰 Total: S/{d.get('edu_total',0)}\n\n"
+                + ("El profesor te contactará para coordinar. Recuerda *estar presente* durante la clase.\n\n"
+                   if modalidad == 'presencial' else
+                   "El profesor te enviará el *enlace de Zoom*.\n\n")
+                + "Escribe *menu* para otra solicitud.")
+
+            print(f"[EDU ASIGNADA] apoderado=+{num_ap_full} profe={profe.get('nombre','')} "
+                  f"nivel={d.get('edu_nivel')} total=S/{d.get('edu_total',0)}", flush=True)
+
+            async def _limpiar_clase_tomada():
+                await asyncio.sleep(300)
+                clases_tomadas.discard(num_ap_full)
+            asyncio.create_task(_limpiar_clase_tomada())
+        else:
+            await enviar_mensaje(numero,
+                "Para aceptar una clase responde: *ACEPTO [número del apoderado]*")
+        return
+
     # ── Conductor responde ACEPTO (con sinónimos) ────────────────────────────
     SINONIMOS_ACEPTO = {"listo","si","sí","ok","dale","voy","ya","tomo","vamos"}
     txt_norm = texto.strip().lower()
@@ -2922,6 +3180,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enrutar_categoria(numero, sesion, "GASTRONOMIA")
         elif texto == "3":
             await enrutar_categoria(numero, sesion, "SEGURIDAD")
+        elif texto == "4":
+            await enrutar_categoria(numero, sesion, "EDUCACION")
         elif texto == "0":
             sesiones.pop(numero, None)
             historial_ia.pop(numero, None)
@@ -2943,6 +3203,9 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             elif categoria == "SEGURIDAD":
                 await enrutar_categoria(numero, sesion, "SEGURIDAD",
                     prefijo="🛡️ Entendido. Te llevo a *Seguridad & Saneamiento*.\n\n")
+            elif categoria == "EDUCACION":
+                await enrutar_categoria(numero, sesion, "EDUCACION",
+                    prefijo="📚 ¡Perfecto! Te llevo a *Educación*.\n\n")
             else:
                 resp = await respuesta_ia(numero, texto)
                 datos["ultima_consulta"] = texto
@@ -3157,6 +3420,144 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 f"Por favor responde:\n\n"
                 f"1️⃣ Aceptar cotización (S/{cot.get('monto','')})\n"
                 f"2️⃣ Rechazar cotización")
+
+    # ══ EDUCACIÓN ══════════════════════════════════════════════════════════════
+    elif estado == S_EDU_PARA_QUIEN:
+        if texto == "1":
+            datos["edu_para_menor"] = False
+            sesion["estado"] = S_EDU_NOMBRE
+            await enviar_mensaje(numero, "🙋 Escribe tu *nombre y apellido*." + NAV)
+        elif texto == "2":
+            datos["edu_para_menor"] = True
+            sesion["estado"] = S_EDU_NOMBRE
+            await enviar_mensaje(numero,
+                "👨‍👩‍👧 Como la clase es para un menor, *tú (apoderado) coordinas la clase "
+                "y debes estar presente durante la misma*.\n\n"
+                "Escribe tu *nombre y apellido*." + NAV)
+        else:
+            await enviar_mensaje(numero,
+                "Responde *1* (para mí) o *2* (para un menor a mi cargo), o *0* para volver." + NAV)
+
+    elif estado == S_EDU_NOMBRE:
+        nombre = " ".join((texto or "").split())
+        if len(nombre) < 3:
+            await enviar_mensaje(numero, "Por favor escribe tu nombre y apellido." + NAV)
+            return
+        datos["nombre"] = nombre
+        if datos.get("edu_para_menor"):
+            sesion["estado"] = S_EDU_ALUMNO
+            await enviar_mensaje(numero, "👦 ¿Cuál es el *nombre del alumno/a*?" + NAV)
+        else:
+            datos["edu_alumno"] = nombre
+            sesion["estado"] = S_EDU_NIVEL
+            await enviar_mensaje(numero, MSG_EDU_NIVEL)
+
+    elif estado == S_EDU_ALUMNO:
+        alumno = " ".join((texto or "").split())
+        if len(alumno) < 2:
+            await enviar_mensaje(numero, "Por favor escribe el nombre del alumno/a." + NAV)
+            return
+        datos["edu_alumno"] = alumno
+        sesion["estado"] = S_EDU_NIVEL
+        await enviar_mensaje(numero, MSG_EDU_NIVEL)
+
+    elif estado == S_EDU_NIVEL:
+        mapa = {"1": "PRIMARIA", "2": "SECUNDARIA", "3": "PREUNIVERSITARIO"}
+        if texto not in mapa:
+            await enviar_mensaje(numero,
+                "Elige *1* Primaria, *2* Secundaria o *3* Preuniversitario." + NAV)
+            return
+        datos["edu_nivel"] = mapa[texto]
+        sesion["estado"] = S_EDU_MATERIA
+        await enviar_mensaje(numero,
+            "📖 ¿Qué *materia o tema* necesita reforzar?\n"
+            "_(Ej: fracciones, álgebra, comunicación, preparación de examen)_" + NAV)
+
+    elif estado == S_EDU_MATERIA:
+        if not texto or len((texto or "").strip()) < 2:
+            await enviar_mensaje(numero, "Cuéntame brevemente la materia o tema." + NAV)
+            return
+        datos["edu_materia"] = texto.strip()
+        sesion["estado"] = S_EDU_MODALIDAD
+        await enviar_mensaje(numero, MSG_EDU_MODALIDAD)
+
+    elif estado == S_EDU_MODALIDAD:
+        if texto == "1":
+            datos["edu_modalidad"] = "presencial"
+            sesion["estado"] = S_EDU_DIRECCION
+            await enviar_mensaje(numero,
+                "📍 ¿Cuál es la *dirección* para la clase presencial?\n"
+                "• Comparte tu ubicación 📌\n• O escribe la dirección" + NAV)
+        elif texto == "2":
+            datos["edu_modalidad"] = "virtual"
+            sesion["estado"] = S_EDU_HORAS
+            await enviar_mensaje(numero, MSG_EDU_HORAS)
+        else:
+            await enviar_mensaje(numero, "Elige *1* Presencial o *2* Virtual (Zoom)." + NAV)
+
+    elif estado == S_EDU_DIRECCION:
+        if tipo == "location" and isinstance(contenido, dict):
+            direccion = f"GPS: {contenido.get('latitude')},{contenido.get('longitude')}"
+        else:
+            direccion = (texto or "").strip()
+        if len(direccion) < 4:
+            await enviar_mensaje(numero,
+                "Por favor escribe la dirección o comparte tu ubicación 📌." + NAV)
+            return
+        datos["edu_direccion"] = direccion
+        sesion["estado"] = S_EDU_HORAS
+        await enviar_mensaje(numero, MSG_EDU_HORAS)
+
+    elif estado == S_EDU_HORAS:
+        digitos = "".join(ch for ch in (texto or "") if ch.isdigit())
+        horas = int(digitos) if digitos else 0
+        if horas < 1 or horas > 8:
+            await enviar_mensaje(numero,
+                "¿Cuántas *horas* de clase? Escribe un número del 1 al 8." + NAV)
+            return
+        datos["edu_horas"] = horas
+        datos["edu_total"] = calcular_total_edu(datos.get("edu_nivel", "PRIMARIA"), horas)
+        sesion["estado"] = S_EDU_CUANDO
+        await enviar_mensaje(numero,
+            "📅 ¿Para *cuándo* necesitas la clase?\n"
+            "_(Ej: hoy 4pm, mañana 10am, sábado 9am)_" + NAV)
+
+    elif estado == S_EDU_CUANDO:
+        if not texto or len((texto or "").strip()) < 3:
+            await enviar_mensaje(numero,
+                "Dime el día y la hora aproximada (ej: mañana 5pm)." + NAV)
+            return
+        datos["edu_cuando"] = texto.strip()
+        sesion["estado"] = S_EDU_CONFIRMAR
+        nivel = datos.get("edu_nivel", "PRIMARIA")
+        modalidad = datos.get("edu_modalidad", "virtual")
+        resumen = (
+            "📋 *Confirma tu solicitud de clase*\n\n"
+            f"👤 Apoderado: {datos.get('nombre','')}\n"
+            f"🎓 Alumno: {datos.get('edu_alumno','')}\n"
+            f"📚 Nivel: {NIVEL_LABEL.get(nivel, nivel)}\n"
+            f"📖 Tema: {datos.get('edu_materia','')}\n"
+            f"💻 Modalidad: {'Presencial (domicilio)' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
+            + (f"📍 Dirección: {datos.get('edu_direccion','')}\n" if modalidad == 'presencial' else "")
+            + f"⏱️ {datos.get('edu_horas',1)} hora(s)\n"
+            f"📅 Cuándo: {datos.get('edu_cuando','')}\n"
+            f"💰 *Total: S/{datos.get('edu_total',0)}*\n\n"
+            + ("⚠️ En clases presenciales el apoderado debe estar presente durante toda la clase.\n\n"
+               if modalidad == 'presencial' else "")
+            + "1️⃣ Confirmar y buscar profesor\n2️⃣ Cancelar" + NAV
+        )
+        await enviar_mensaje(numero, resumen)
+
+    elif estado == S_EDU_CONFIRMAR:
+        if texto == "1":
+            await notificar_profesores(sesion, numero)
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+        elif texto == "2":
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            await enviar_mensaje(numero,
+                "❌ Solicitud cancelada.\n\nEscribe *menu* para volver al inicio.")
+        else:
+            await enviar_mensaje(numero, "Responde *1* para confirmar o *2* para cancelar." + NAV)
 
     # ══ CONSULTA OPCION ═══════════════════════════════════════════════════════
     elif estado == S_CONSULTA_OPCION:
