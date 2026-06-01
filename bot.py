@@ -24,6 +24,8 @@ MINUTOS_CALIFICAR = int(os.getenv("MINUTOS_CALIFICAR", "30"))
 META_APP_ID       = os.getenv("META_APP_ID", "")
 META_APP_SECRET   = os.getenv("META_APP_SECRET", "")
 ADMIN_KEY         = os.getenv("ADMIN_KEY", "cuervo2025")
+# Margen para considerar "abierta" la ventana de 24h de WhatsApp (usamos 23h por seguridad)
+VENTANA_ABIERTA_HORAS = int(os.getenv("VENTANA_ABIERTA_HORAS", "23"))
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
@@ -718,6 +720,82 @@ async def enviar_template_inicio_turno(to: str):
     except Exception as e:
         print(f"[TEMPLATE EXCEPTION] inicio_turno_conductor to={to} error={e}", flush=True)
         return False
+
+
+def _limpiar_param_template(s) -> str:
+    """
+    Limpia un texto para usarlo como variable de plantilla de WhatsApp.
+    Meta rechaza variables con saltos de línea, tabs o 4+ espacios seguidos.
+    """
+    return " ".join(str(s or "").split())[:400]
+
+
+async def enviar_template_solicitud(to: str, p1: str, p2: str, p3: str, p4: str):
+    """
+    Envía la plantilla aprobada de nueva solicitud de servicio.
+    Plantilla Meta: nueva_solicitud_servicio  (idioma es_PE)
+    Variables: {{1}}=tipo  {{2}}=cliente  {{3}}=detalle  {{4}}=numero cliente
+    Se usa cuando la ventana de 24h del conductor está cerrada, para garantizar entrega.
+    """
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": "nueva_solicitud_servicio",
+            "language": {"code": "es_PE"},
+            "components": [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": _limpiar_param_template(p1)},
+                    {"type": "text", "text": _limpiar_param_template(p2)},
+                    {"type": "text", "text": _limpiar_param_template(p3)},
+                    {"type": "text", "text": _limpiar_param_template(p4)},
+                ]
+            }]
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(url, headers=headers, json=payload)
+
+        if r.status_code >= 400:
+            print(f"[TEMPLATE ERROR] nueva_solicitud_servicio to={to} status={r.status_code} {r.text}", flush=True)
+            return False
+
+        print(f"[TEMPLATE] nueva_solicitud_servicio enviado to={to} status={r.status_code}", flush=True)
+        return True
+
+    except Exception as e:
+        print(f"[TEMPLATE EXCEPTION] nueva_solicitud_servicio to={to} error={e}", flush=True)
+        return False
+
+
+async def notificar_conductor_inteligente(tel: str, msg_libre: str, tipo_label: str,
+                                          cliente_str: str, detalle_corto: str, num_cliente: str):
+    """
+    Entrega la solicitud al conductor de la forma más confiable y económica:
+    - Ventana de 24h ABIERTA (escribió hace poco) -> texto libre (gratis, con todo el detalle).
+      Si el texto libre falla por cualquier motivo -> cae automáticamente a plantilla.
+    - Ventana CERRADA -> plantilla aprobada directo (entrega garantizada, costo mínimo).
+    """
+    ahora = time.time()
+    ult = ultima_actividad.get(tel, 0)
+    ventana_abierta = (ahora - ult) < (VENTANA_ABIERTA_HORAS * 3600)
+
+    if ventana_abierta:
+        ok = await enviar_mensaje(tel, msg_libre)
+        if ok:
+            return True
+        print(f"[DESPACHO] Texto libre falló a {tel}, reintentando por plantilla", flush=True)
+
+    return await enviar_template_solicitud(tel, tipo_label, cliente_str, detalle_corto, num_cliente)
 
 
 async def reenviar_imagen(to: str, media_id: str):
@@ -1847,8 +1925,33 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
         "conductores_notificados": list(conductores_disponibles)
     }
 
-    # Envío PARALELO a todos los conductores (asyncio.gather = mucho más rápido)
-    tareas = [enviar_mensaje(num_conductor, msg) for num_conductor in conductores_disponibles]
+    # ── Parámetros para plantilla de respaldo (cuando la ventana de 24h está cerrada) ──
+    tipo_label = {
+        "TAXI": "TAXI", "ENCOMIENDA": "ENCOMIENDA",
+        "COLECTIVO": "COLECTIVO", "TURISMO": "TOUR"
+    }.get(tipo, "SERVICIO")
+    cliente_str = _limpiar_param_template(f"{d.get('nombre','Cliente')} | +{numero_cliente}")
+
+    if tipo == "TAXI":
+        detalle_corto = f"Recojo: {d.get('recojo_texto','')} | Destino: {d.get('destino_texto','')} | {tarifa_txt} | {d.get('pago','')}"
+    elif tipo == "ENCOMIENDA":
+        detalle_corto = f"{d.get('enc_descripcion','')} | {d.get('enc_origen','')} a {d.get('enc_destino','')} | {tarifa_txt} | {d.get('pago','')}"
+    elif tipo == "COLECTIVO":
+        detalle_corto = f"{d.get('colectivo_ruta','')} | {d.get('colectivo_horario','')} | {d.get('colectivo_asientos','')} asiento(s) | S/{d.get('colectivo_total','')}"
+    elif tipo == "TURISMO":
+        detalle_corto = f"{d.get('ruta_nombre','')} | {d.get('fecha','')} | {d.get('personas','')} pax | {precio_txt}"
+    else:
+        detalle_corto = "Nueva solicitud de servicio"
+    detalle_corto = _limpiar_param_template(detalle_corto)
+
+    # Envío PARALELO con lógica inteligente de ventana 24h
+    # (texto libre si está abierta; plantilla si está cerrada -> garantiza entrega)
+    tareas = [
+        notificar_conductor_inteligente(
+            num_conductor, msg, tipo_label, cliente_str, detalle_corto, numero_cliente
+        )
+        for num_conductor in conductores_disponibles
+    ]
     if GRUPO_CONDUCTORES:
         tareas.append(enviar_mensaje(GRUPO_CONDUCTORES, msg))
     await asyncio.gather(*tareas)
@@ -4684,6 +4787,30 @@ async def admin_estado_conductores(clave: str = ""):
         "conductores": activos,
         "nota": "ACTIVO en Sheets NO garantiza entrega de WhatsApp: la ventana de 24h "
                 "solo se abre cuando el conductor le escribe al bot (ej. responde al recordatorio)."
+    }
+
+
+@app.get("/admin/test-solicitud")
+async def admin_test_solicitud(clave: str = "", to: str = ""):
+    """
+    Prueba la plantilla de despacho nueva_solicitud_servicio.
+    Uso: /admin/test-solicitud?clave=TU_CLAVE&to=51992995140
+    Revisa logs: [TEMPLATE] nueva_solicitud_servicio enviado = aprobada.
+    [TEMPLATE ERROR] status=400 = aún no aprobada / nombre o idioma no coincide.
+    """
+    if clave != ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Clave inválida")
+    if not to:
+        raise HTTPException(status_code=400, detail="Falta parámetro 'to' (ej. ?to=51992995140)")
+
+    ok = await enviar_template_solicitud(
+        to, "TAXI", "Cliente Prueba | +51999999999",
+        "Recojo: Plaza de Armas | Destino: Hospital | S/10 | Efectivo", "51999999999"
+    )
+    return {
+        "ok": ok,
+        "to": to,
+        "nota": "Revisa los logs de Render. [TEMPLATE]=aprobada y enviada. [TEMPLATE ERROR] status=400=falta aprobar en Meta."
     }
 
 
