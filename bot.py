@@ -23,6 +23,7 @@ OPERADOR_WA       = os.getenv("OPERADOR_WA", "")
 MINUTOS_CALIFICAR = int(os.getenv("MINUTOS_CALIFICAR", "30"))
 META_APP_ID       = os.getenv("META_APP_ID", "")
 META_APP_SECRET   = os.getenv("META_APP_SECRET", "")
+ADMIN_KEY         = os.getenv("ADMIN_KEY", "cuervo2025")
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
@@ -1384,10 +1385,13 @@ async def verificar_activos_y_alertar_operador():
 
 async def programador_inicio_turno_conductores():
     """
-    Programador diario:
-    - 07:00 a 07:10 Lima: envía plantilla de inicio de turno.
-    - 08:00 a 08:10 Lima: alerta si no hay conductores activos.
-    Ejecuta una sola vez por día cada acción.
+    Programador diario (robusto ante reinicios de Render):
+    - Recordatorio: se envía la PRIMERA vez que el bot esté vivo dentro de la
+      ventana 07:00–10:59 Lima y aún no se haya enviado hoy.
+      Antes era una ventana rígida 07:00–07:10; si Render reiniciaba después
+      de las 07:10 el recordatorio se perdía el día completo (bug confirmado).
+    - Alerta: si a partir de las 08:00 Lima no hay conductores activos, avisa.
+    Cada acción se ejecuta una sola vez por día.
     """
     try:
         from zoneinfo import ZoneInfo
@@ -1395,21 +1399,41 @@ async def programador_inicio_turno_conductores():
     except Exception:
         tz_lima = None
 
+    # Ventana de recuperación (catch-up). Si el bot arranca tarde dentro de
+    # este rango, igual manda el recordatorio. Ajustable por env si lo deseas.
+    HORA_RECORDATORIO_INICIO = int(os.getenv("TURNO_HORA_INICIO", "7"))   # 07:00 Lima
+    HORA_RECORDATORIO_FIN    = int(os.getenv("TURNO_HORA_FIN", "11"))     # hasta 10:59 Lima
+    HORA_ALERTA              = int(os.getenv("TURNO_HORA_ALERTA", "8"))   # alerta desde 08:00 Lima
+
     enviados_recordatorio = set()
     alertas_0800 = set()
 
-    print("[BOT] Programador inicio turno iniciado - 07:00 Lima / alerta 08:00 Lima", flush=True)
+    print(
+        f"[BOT] Programador inicio turno iniciado - recordatorio "
+        f"{HORA_RECORDATORIO_INICIO:02d}:00–{HORA_RECORDATORIO_FIN-1:02d}:59 Lima "
+        f"(catch-up) / alerta {HORA_ALERTA:02d}:00 Lima",
+        flush=True
+    )
 
     while True:
         try:
             ahora = datetime.now(tz_lima) if tz_lima else datetime.now()
             dia = ahora.strftime("%Y-%m-%d")
 
-            if ahora.hour == 7 and 0 <= ahora.minute <= 10 and dia not in enviados_recordatorio:
+            # Recordatorio: cualquier momento dentro de la ventana, una vez al día.
+            en_ventana_recordatorio = (
+                HORA_RECORDATORIO_INICIO <= ahora.hour < HORA_RECORDATORIO_FIN
+            )
+            if en_ventana_recordatorio and dia not in enviados_recordatorio:
                 enviados_recordatorio.add(dia)
+                print(
+                    f"[TURNO] Disparando recordatorio (hora Lima {ahora.strftime('%H:%M')})",
+                    flush=True
+                )
                 await enviar_recordatorio_inicio_turno_masivo()
 
-            if ahora.hour == 8 and 0 <= ahora.minute <= 10 and dia not in alertas_0800:
+            # Alerta: desde la hora de alerta en adelante, una vez al día.
+            if ahora.hour >= HORA_ALERTA and dia not in alertas_0800:
                 alertas_0800.add(dia)
                 await verificar_activos_y_alertar_operador()
 
@@ -4616,6 +4640,52 @@ async def update_ticket_estado(ticket_id: str, body: dict):
                     f"— Equipo Barranca Móvil 🚖")
             return {"ok": True, "ticket": t}
     raise HTTPException(status_code=404, detail="Ticket no encontrado")
+
+@app.get("/admin/recordatorio")
+async def admin_disparar_recordatorio(clave: str = ""):
+    """
+    Dispara el recordatorio de inicio de turno MANUALMENTE (para pruebas).
+    Uso: https://barranca-movil-bot.onrender.com/admin/recordatorio?clave=TU_CLAVE
+    Revisa los logs de Render: si ves [TEMPLATE] -> plantilla aprobada y enviada.
+    Si ves [TEMPLATE ERROR] status=400 -> la plantilla NO está aprobada en Meta.
+    """
+    if clave != ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Clave inválida")
+
+    conductores = await obtener_conductores_para_recordatorio_turno()
+    print(f"[ADMIN] Disparo MANUAL de recordatorio a {len(conductores)} conductor(es)", flush=True)
+    await enviar_recordatorio_inicio_turno_masivo()
+    return {
+        "ok": True,
+        "accion": "recordatorio_disparado",
+        "conductores_objetivo": len(conductores),
+        "detalle": [c.get("telefono") for c in conductores],
+        "nota": "Revisa los logs de Render. [TEMPLATE]=enviado OK. [TEMPLATE ERROR] status=400=plantilla no aprobada."
+    }
+
+
+@app.get("/admin/estado-conductores")
+async def admin_estado_conductores(clave: str = ""):
+    """
+    Muestra qué conductores figuran ACTIVOS en Google Sheets en este momento.
+    Uso: https://barranca-movil-bot.onrender.com/admin/estado-conductores?clave=TU_CLAVE
+    """
+    if clave != ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Clave inválida")
+
+    try:
+        activos = await obtener_conductores_activos_desde_sheets()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    return {
+        "ok": True,
+        "activos_en_sheets": len(activos),
+        "conductores": activos,
+        "nota": "ACTIVO en Sheets NO garantiza entrega de WhatsApp: la ventana de 24h "
+                "solo se abre cuando el conductor le escribe al bot (ej. responde al recordatorio)."
+    }
+
 
 @app.get("/")
 async def root():
