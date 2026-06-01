@@ -241,13 +241,11 @@ ESTADO_ANTERIOR = {
     S_EDU_PARA_QUIEN:       S_MENU,
     S_EDU_NOMBRE:           S_EDU_PARA_QUIEN,
     S_EDU_ALUMNO:           S_EDU_NOMBRE,
-    S_EDU_NIVEL:            S_EDU_ALUMNO,
+    S_EDU_NIVEL:            S_EDU_NOMBRE,
     S_EDU_MATERIA:          S_EDU_NIVEL,
     S_EDU_MODALIDAD:        S_EDU_MATERIA,
     S_EDU_DIRECCION:        S_EDU_MODALIDAD,
-    S_EDU_HORAS:            S_EDU_MODALIDAD,
-    S_EDU_CUANDO:           S_EDU_HORAS,
-    S_EDU_CONFIRMAR:        S_EDU_CUANDO,
+    S_EDU_CONFIRMAR:        S_EDU_MODALIDAD,
 }
 
 # ── Prompt a reenviar cuando el usuario regresa ───────────────────────────────
@@ -289,14 +287,12 @@ PROMPT_VOLVER = {
     S_SEG_URGENCIA:       "⏰ *¿Con qué urgencia necesitas el servicio?*\n1️⃣ Urgente — lo antes posible\n2️⃣ Programar — elegir fecha y hora\n0️⃣ Volver",
     # Educación
     S_EDU_PARA_QUIEN:     "📚 *¿Para quién es la clase?*\n1️⃣ Para mí (soy mayor de edad)\n2️⃣ Para un menor a mi cargo\n0️⃣ Volver",
-    S_EDU_NOMBRE:         "🙋 *¿Cuál es tu nombre y apellido?* _(apoderado/solicitante)_",
+    S_EDU_NOMBRE:         "🙋 *Escribe tu nombre y DNI* _(apoderado)_\nEjemplo: Cesar Calvo 12345678",
     S_EDU_ALUMNO:         "👦 *¿Nombre del alumno/a?*",
     S_EDU_NIVEL:          "🎓 *¿Qué nivel?*\n1️⃣ Primaria\n2️⃣ Secundaria\n3️⃣ Preuniversitario",
-    S_EDU_MATERIA:        "📖 *¿Qué materia o tema necesita reforzar?*\n_(Ej: fracciones, álgebra, preparación examen)_",
-    S_EDU_MODALIDAD:      "💻 *¿Cómo prefieres la clase?*\n1️⃣ Presencial (el profe va a tu domicilio)\n2️⃣ Virtual (por Zoom)",
+    S_EDU_MATERIA:        "📖 *¿Qué materia o tema necesita reforzar?*\n_(Ej: fracciones, álgebra, comunicación)_",
+    S_EDU_MODALIDAD:      "💻 *¿Cómo prefieres la clase?*\n1️⃣ Presencial (a domicilio)\n2️⃣ Virtual (Zoom)",
     S_EDU_DIRECCION:      "📍 *¿Cuál es la dirección para la clase presencial?*\n• Comparte tu ubicación 📌\n• O escribe la dirección",
-    S_EDU_HORAS:          "⏱️ *¿Cuántas horas de clase?*\n_(Escribe el número, ej: 1, 2)_",
-    S_EDU_CUANDO:         "📅 *¿Para cuándo?*\n_(Ej: hoy 4pm, mañana 10am, viernes 6pm)_",
 }
 
 sesiones: dict[str, dict] = {}
@@ -1935,9 +1931,32 @@ async def enrutar_categoria(numero: str, sesion: dict, categoria: str, prefijo: 
     return False
 
 
-def calcular_total_edu(nivel: str, horas: int) -> int:
-    """Total de la clase = tarifa por hora del nivel × horas (mínimo 1 hora)."""
-    return TARIFAS_EDU.get(nivel, 0) * max(1, int(horas or 1))
+def tarifa_hora_edu(nivel: str) -> int:
+    """Tarifa por hora del nivel (S/)."""
+    return TARIFAS_EDU.get(nivel, 0)
+
+
+async def _edu_mostrar_resumen(numero: str, sesion: dict):
+    """Muestra el resumen de la solicitud de clase y pasa a confirmación."""
+    d = sesion["datos"]
+    sesion["estado"] = S_EDU_CONFIRMAR
+    nivel = d.get("edu_nivel", "PRIMARIA")
+    modalidad = d.get("edu_modalidad", "virtual")
+    resumen = (
+        "📋 *Confirma tu solicitud de clase*\n\n"
+        f"👤 Apoderado: {d.get('nombre','')} (DNI {d.get('edu_dni','')})\n"
+        f"🎓 Alumno: {d.get('edu_alumno','')}\n"
+        f"📚 Nivel: {NIVEL_LABEL.get(nivel, nivel)}\n"
+        f"📖 Tema: {d.get('edu_materia','')}\n"
+        f"💻 Modalidad: {'Presencial (domicilio)' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
+        + (f"📍 Dirección: {d.get('edu_direccion','')}\n" if modalidad == 'presencial' else "")
+        + f"💰 *Tarifa: S/{tarifa_hora_edu(nivel)} por hora*\n"
+        "_(El horario y la duración los coordinas con el profesor)_\n\n"
+        + ("⚠️ En clases presenciales el apoderado debe estar presente durante toda la clase.\n\n"
+           if modalidad == 'presencial' else "")
+        + "1️⃣ Confirmar y buscar profesor\n2️⃣ Cancelar" + NAV
+    )
+    await enviar_mensaje(numero, resumen)
 
 
 async def notificar_profesores(sesion: dict, numero_apoderado: str):
@@ -1946,7 +1965,7 @@ async def notificar_profesores(sesion: dict, numero_apoderado: str):
     d = sesion["datos"]
     nivel = d.get("edu_nivel", "PRIMARIA")
     modalidad = d.get("edu_modalidad", "virtual")
-    total = d.get("edu_total", 0)
+    tarifa = tarifa_hora_edu(nivel)
     alumno = d.get("edu_alumno") or d.get("nombre", "Alumno")
 
     candidatos = [
@@ -1980,8 +1999,7 @@ async def notificar_profesores(sesion: dict, numero_apoderado: str):
         f"📖 Tema: {d.get('edu_materia','reforzamiento')}\n"
         f"💻 Modalidad: {'Presencial (domicilio)' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
         + (f"📍 Dirección: {d.get('edu_direccion','')}\n" if modalidad == 'presencial' else "")
-        + f"⏱️ {d.get('edu_horas',1)} hora(s) | 📅 {d.get('edu_cuando','a coordinar')}\n"
-        f"💰 Total: S/{total}\n\n"
+        + f"💰 Tarifa: S/{tarifa}/hora\n\n"
         + ("⚠️ *Clase presencial:* el apoderado estará presente durante toda la clase.\n\n"
            if modalidad == 'presencial' else "")
         + f"Responde: *ACEPTO {numero_apoderado}*"
@@ -1990,8 +2008,7 @@ async def notificar_profesores(sesion: dict, numero_apoderado: str):
     cliente_str = _limpiar_param_template(f"{d.get('nombre','Apoderado')} | +{numero_apoderado}")
     detalle_corto = _limpiar_param_template(
         f"{NIVEL_LABEL.get(nivel, nivel)} | {d.get('edu_materia','reforzamiento')} | "
-        f"{'Presencial' if modalidad=='presencial' else 'Virtual'} | "
-        f"{d.get('edu_horas',1)}h | S/{total}"
+        f"{'Presencial' if modalidad=='presencial' else 'Virtual'} | S/{tarifa}/h"
     )
 
     clases_pendientes[numero_apoderado] = {
@@ -2641,19 +2658,18 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             # Confirmar al profesor con los datos del apoderado
             await enviar_mensaje(numero,
                 f"✅ *¡Clase asignada para ti!*\n\n"
-                f"👤 Apoderado: {d.get('nombre','N/A')} | 📱 +{num_ap_full}\n"
+                f"👤 Apoderado: {d.get('nombre','N/A')} (DNI {d.get('edu_dni','')}) | 📱 +{num_ap_full}\n"
                 f"🎓 Alumno: {d.get('edu_alumno','')}\n"
                 f"📚 Nivel: {nivel_lbl}\n"
                 f"📖 Tema: {d.get('edu_materia','')}\n"
                 f"💻 Modalidad: {'Presencial' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
                 + (f"📍 Dirección: {d.get('edu_direccion','')}\n" if modalidad == 'presencial' else "")
-                + f"⏱️ {d.get('edu_horas',1)} hora(s) | 📅 {d.get('edu_cuando','')}\n"
-                f"💰 Total: S/{d.get('edu_total',0)}\n\n"
+                + f"💰 Tarifa: S/{tarifa_hora_edu(d.get('edu_nivel'))}/hora\n\n"
                 + ("⚠️ El apoderado estará presente durante toda la clase.\n"
                    "💡 Para trasladarte puedes pedir un taxi por este mismo bot. 🚖\n\n"
                    if modalidad == 'presencial' else
                    "Coordina el enlace de *Zoom* directamente con el apoderado.\n\n")
-                + "Contacta al apoderado para confirmar los detalles.")
+                + "Contacta al apoderado para acordar *horario y duración*.")
 
             # Notificar al apoderado con los datos del profesor
             await enviar_mensaje(num_ap_full,
@@ -2662,15 +2678,15 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 f"📱 Contacto: +{numero}\n"
                 f"📖 {d.get('edu_materia','')} — {nivel_lbl}\n"
                 f"💻 {'Presencial (domicilio)' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
-                f"📅 {d.get('edu_cuando','')}\n"
-                f"💰 Total: S/{d.get('edu_total',0)}\n\n"
-                + ("El profesor te contactará para coordinar. Recuerda *estar presente* durante la clase.\n\n"
+                f"💰 Tarifa: S/{tarifa_hora_edu(d.get('edu_nivel'))}/hora\n\n"
+                + ("El profesor te contactará para coordinar *horario y duración*. "
+                   "Recuerda *estar presente* durante la clase.\n\n"
                    if modalidad == 'presencial' else
-                   "El profesor te enviará el *enlace de Zoom*.\n\n")
+                   "El profesor te enviará el *enlace de Zoom* y coordinarán horario.\n\n")
                 + "Escribe *menu* para otra solicitud.")
 
             print(f"[EDU ASIGNADA] apoderado=+{num_ap_full} profe={profe.get('nombre','')} "
-                  f"nivel={d.get('edu_nivel')} total=S/{d.get('edu_total',0)}", flush=True)
+                  f"nivel={d.get('edu_nivel')} tarifa=S/{tarifa_hora_edu(d.get('edu_nivel'))}/h", flush=True)
 
             async def _limpiar_clase_tomada():
                 await asyncio.sleep(300)
@@ -3426,34 +3442,37 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         if texto == "1":
             datos["edu_para_menor"] = False
             sesion["estado"] = S_EDU_NOMBRE
-            await enviar_mensaje(numero, "🙋 Escribe tu *nombre y apellido*." + NAV)
+            await enviar_mensaje(numero,
+                "🙋 Escribe tu *nombre y DNI*.\nEjemplo: *Cesar Calvo 12345678*" + NAV)
         elif texto == "2":
             datos["edu_para_menor"] = True
             sesion["estado"] = S_EDU_NOMBRE
             await enviar_mensaje(numero,
-                "👨‍👩‍👧 Como la clase es para un menor, *tú (apoderado) coordinas la clase "
-                "y debes estar presente durante la misma*.\n\n"
-                "Escribe tu *nombre y apellido*." + NAV)
+                "👨‍👩‍👧 Como la clase es para un menor, *tú (apoderado) coordinas y debes "
+                "estar presente durante la clase*.\n\n"
+                "Escribe tu *nombre y DNI*.\nEjemplo: *Cesar Calvo 12345678*" + NAV)
         else:
             await enviar_mensaje(numero,
                 "Responde *1* (para mí) o *2* (para un menor a mi cargo), o *0* para volver." + NAV)
 
     elif estado == S_EDU_NOMBRE:
-        nombre = " ".join((texto or "").split())
-        if len(nombre) < 3:
-            await enviar_mensaje(numero, "Por favor escribe tu nombre y apellido." + NAV)
+        nombre, dni = extraer_nombre_dni(texto)
+        if not dni or len(nombre) < 3:
+            await enviar_mensaje(numero,
+                "Necesito tu *nombre y DNI* juntos.\nEjemplo: *Cesar Calvo 12345678*" + NAV)
             return
         datos["nombre"] = nombre
+        datos["edu_dni"] = dni
         if datos.get("edu_para_menor"):
             sesion["estado"] = S_EDU_ALUMNO
-            await enviar_mensaje(numero, "👦 ¿Cuál es el *nombre del alumno/a*?" + NAV)
+            await enviar_mensaje(numero, f"Gracias, *{nombre}*. 👦 ¿Cuál es el *nombre del alumno/a*?" + NAV)
         else:
             datos["edu_alumno"] = nombre
             sesion["estado"] = S_EDU_NIVEL
-            await enviar_mensaje(numero, MSG_EDU_NIVEL)
+            await enviar_mensaje(numero, f"Gracias, *{nombre}*.\n\n" + MSG_EDU_NIVEL)
 
     elif estado == S_EDU_ALUMNO:
-        alumno = " ".join((texto or "").split())
+        alumno = normalizar_nombre_persona(texto)
         if len(alumno) < 2:
             await enviar_mensaje(numero, "Por favor escribe el nombre del alumno/a." + NAV)
             return
@@ -3490,8 +3509,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "• Comparte tu ubicación 📌\n• O escribe la dirección" + NAV)
         elif texto == "2":
             datos["edu_modalidad"] = "virtual"
-            sesion["estado"] = S_EDU_HORAS
-            await enviar_mensaje(numero, MSG_EDU_HORAS)
+            await _edu_mostrar_resumen(numero, sesion)
         else:
             await enviar_mensaje(numero, "Elige *1* Presencial o *2* Virtual (Zoom)." + NAV)
 
@@ -3505,48 +3523,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "Por favor escribe la dirección o comparte tu ubicación 📌." + NAV)
             return
         datos["edu_direccion"] = direccion
-        sesion["estado"] = S_EDU_HORAS
-        await enviar_mensaje(numero, MSG_EDU_HORAS)
-
-    elif estado == S_EDU_HORAS:
-        digitos = "".join(ch for ch in (texto or "") if ch.isdigit())
-        horas = int(digitos) if digitos else 0
-        if horas < 1 or horas > 8:
-            await enviar_mensaje(numero,
-                "¿Cuántas *horas* de clase? Escribe un número del 1 al 8." + NAV)
-            return
-        datos["edu_horas"] = horas
-        datos["edu_total"] = calcular_total_edu(datos.get("edu_nivel", "PRIMARIA"), horas)
-        sesion["estado"] = S_EDU_CUANDO
-        await enviar_mensaje(numero,
-            "📅 ¿Para *cuándo* necesitas la clase?\n"
-            "_(Ej: hoy 4pm, mañana 10am, sábado 9am)_" + NAV)
-
-    elif estado == S_EDU_CUANDO:
-        if not texto or len((texto or "").strip()) < 3:
-            await enviar_mensaje(numero,
-                "Dime el día y la hora aproximada (ej: mañana 5pm)." + NAV)
-            return
-        datos["edu_cuando"] = texto.strip()
-        sesion["estado"] = S_EDU_CONFIRMAR
-        nivel = datos.get("edu_nivel", "PRIMARIA")
-        modalidad = datos.get("edu_modalidad", "virtual")
-        resumen = (
-            "📋 *Confirma tu solicitud de clase*\n\n"
-            f"👤 Apoderado: {datos.get('nombre','')}\n"
-            f"🎓 Alumno: {datos.get('edu_alumno','')}\n"
-            f"📚 Nivel: {NIVEL_LABEL.get(nivel, nivel)}\n"
-            f"📖 Tema: {datos.get('edu_materia','')}\n"
-            f"💻 Modalidad: {'Presencial (domicilio)' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
-            + (f"📍 Dirección: {datos.get('edu_direccion','')}\n" if modalidad == 'presencial' else "")
-            + f"⏱️ {datos.get('edu_horas',1)} hora(s)\n"
-            f"📅 Cuándo: {datos.get('edu_cuando','')}\n"
-            f"💰 *Total: S/{datos.get('edu_total',0)}*\n\n"
-            + ("⚠️ En clases presenciales el apoderado debe estar presente durante toda la clase.\n\n"
-               if modalidad == 'presencial' else "")
-            + "1️⃣ Confirmar y buscar profesor\n2️⃣ Cancelar" + NAV
-        )
-        await enviar_mensaje(numero, resumen)
+        await _edu_mostrar_resumen(numero, sesion)
 
     elif estado == S_EDU_CONFIRMAR:
         if texto == "1":
