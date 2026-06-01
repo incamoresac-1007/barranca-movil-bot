@@ -537,6 +537,24 @@ Muy pronto podrás pedir tu comida favorita sin salir de WhatsApp. 🙌
 
 Escribe *menu* para volver al inicio."""
 
+MSG_SEG_SUBMENU = (
+    "🛡️ *Seguridad & Saneamiento*\n\n"
+    "¿Qué servicio necesitas?\n\n"
+    "1️⃣ Extintores (venta / recarga)\n"
+    "2️⃣ Señalización de seguridad\n"
+    "3️⃣ Fumigación / Control de plagas\n"
+    "4️⃣ Capacitación y Defensa Civil\n"
+    "5️⃣ Otro servicio\n"
+    "0️⃣ Volver al menú principal" + NAV
+)
+
+MSG_SEG_FUERA_HORARIO = (
+    "🛡️ *Seguridad & Saneamiento*\n\n"
+    "⏰ Nuestro proveedor atiende de *8:00 am a 6:00 pm*.\n\n"
+    "Escríbenos mañana en ese horario y con gusto te ayudamos 🙌\n\n"
+    "Escribe *menu* para volver al inicio."
+)
+
 MSG_TARIFAS = """💰 *Tarifas Barranca Móvil*
 
 🚖 *Taxi Urbano:* S/3.00 + S/1.20/km
@@ -1719,6 +1737,99 @@ async def respuesta_ia(numero: str, texto: str) -> str:
     historial_ia[numero].append({"role": "assistant", "content": resp})
     return resp
 
+
+# ── Enrutador inteligente de Elizabeth (detección de intención) ────────────────
+PALABRAS_INTENCION = {
+    "TRANSPORTE": [
+        "taxi", "colectivo", "encomienda", "movilidad", "carrera", "recoj", "recog",
+        "llevame", "llévame", "lleva me", "viaje", "tour", "turismo", "paquete", "envio",
+        "envío", "enviar", "transporte", "mototaxi", "auto", "pasaje", "traslado",
+        "ir a", "voy a", "moto", "delivery de paquete"
+    ],
+    "GASTRONOMIA": [
+        "comida", "comer", "hambre", "almuerzo", "almorzar", "cena", "cenar", "restaurante",
+        "pollo", "brasa", "chifa", "ceviche", "cevicheria", "pizza", "hamburguesa",
+        "delivery", "pedir comida", "antojo", "desayuno", "menu del dia", "menú del día",
+        "lo que hay de comer", "tengo hambre", "quiero comer", "pollada"
+    ],
+    "SEGURIDAD": [
+        "extintor", "extintores", "fumiga", "plaga", "señaliz", "senaliz", "señaliz",
+        "defensa civil", "saneamiento", "capacitacion", "capacitación", "recarga de extintor",
+        "control de plagas", "desinfecc", "desratiz", "fumigacion", "fumigación"
+    ],
+}
+
+
+def _intencion_por_palabras(texto: str):
+    """Atajo gratis e instantáneo: detecta categoría por palabras clave.
+    Devuelve la categoría si hay un ganador claro, o None si no hay match o hay empate."""
+    t = (texto or "").lower()
+    puntajes = {cat: sum(1 for p in palabras if p in t) for cat, palabras in PALABRAS_INTENCION.items()}
+    mejor = max(puntajes, key=puntajes.get)
+    if puntajes[mejor] == 0:
+        return None
+    empatados = [c for c, v in puntajes.items() if v == puntajes[mejor]]
+    return mejor if len(empatados) == 1 else None
+
+
+async def clasificar_intencion(texto: str) -> str:
+    """Devuelve TRANSPORTE | GASTRONOMIA | SEGURIDAD | CONSULTA.
+    Primero intenta por palabras clave; si no es claro, usa Groq; si falla, CONSULTA."""
+    rapido = _intencion_por_palabras(texto)
+    if rapido:
+        return rapido
+
+    sys = (
+        "Eres un clasificador de intención para un asistente de servicios locales en Barranca, Perú. "
+        "Lee el mensaje del cliente y responde SOLO con UNA palabra, sin explicaciones ni puntuación, "
+        "eligiendo la categoría correcta:\n"
+        "TRANSPORTE = taxi, colectivo, encomienda o envío de paquetes, tours o turismo, movilidad en general.\n"
+        "GASTRONOMIA = pedir comida, restaurantes, delivery de comida, antojos.\n"
+        "SEGURIDAD = extintores, fumigación o control de plagas, señalización, defensa civil, saneamiento.\n"
+        "CONSULTA = saludos, preguntas generales, dudas, o cualquier cosa que no encaje claramente en las anteriores.\n"
+        "Responde únicamente una de estas palabras: TRANSPORTE, GASTRONOMIA, SEGURIDAD, CONSULTA."
+    )
+
+    def _groq():
+        return groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "system", "content": sys},
+                      {"role": "user", "content": texto}],
+            max_tokens=4, temperature=0.0
+        )
+
+    try:
+        completion = await asyncio.wait_for(asyncio.to_thread(_groq), timeout=3.0)
+        raw = (completion.choices[0].message.content or "").strip().upper()
+        for cat in ("TRANSPORTE", "GASTRONOMIA", "SEGURIDAD", "CONSULTA"):
+            if cat in raw:
+                return cat
+    except (asyncio.TimeoutError, Exception):
+        pass
+    return "CONSULTA"
+
+
+async def enrutar_categoria(numero: str, sesion: dict, categoria: str, prefijo: str = "") -> bool:
+    """Lleva al cliente al flujo de la categoría detectada.
+    Fuente única de verdad para el menú principal (la usan tanto las opciones
+    numéricas como el enrutador inteligente por texto libre)."""
+    if categoria == "TRANSPORTE":
+        sesion["estado"] = S_TRANSPORTE_MENU
+        await enviar_mensaje(numero, prefijo + MSG_TRANSPORTE_MENU)
+        return True
+    if categoria == "GASTRONOMIA":
+        sesion["estado"] = S_GASTRO_LISTA
+        await enviar_mensaje(numero, prefijo + MSG_GASTRO_PROXIMAMENTE)
+        return True
+    if categoria == "SEGURIDAD":
+        if not dentro_horario_seg():
+            await enviar_mensaje(numero, MSG_SEG_FUERA_HORARIO)
+            return True
+        sesion["estado"] = S_SEG_SUBCATEGORIA
+        await enviar_mensaje(numero, prefijo + MSG_SEG_SUBMENU)
+        return True
+    return False
+
 # ── Historial de viajes ──────────────────────────────────────────────────────
 def guardar_viaje(numero: str, datos: dict, tipo: str):
     """Guarda un viaje en el historial del cliente."""
@@ -2806,29 +2917,11 @@ async def procesar(numero: str, tipo: str, contenido: dict):
     # ══ MENU CENTRAL EL CUERVO ════════════════════════════════════════════════
     elif estado == S_MENU:
         if texto == "1":
-            sesion["estado"] = S_TRANSPORTE_MENU
-            await enviar_mensaje(numero, MSG_TRANSPORTE_MENU)
+            await enrutar_categoria(numero, sesion, "TRANSPORTE")
         elif texto == "2":
-            sesion["estado"] = S_GASTRO_LISTA
-            await enviar_mensaje(numero, MSG_GASTRO_PROXIMAMENTE)
+            await enrutar_categoria(numero, sesion, "GASTRONOMIA")
         elif texto == "3":
-            if not dentro_horario_seg():
-                await enviar_mensaje(numero,
-                    "🛡️ *Seguridad & Saneamiento*\n\n"
-                    "⏰ Nuestro proveedor atiende de *8:00 am a 6:00 pm*.\n\n"
-                    "Escríbenos mañana en ese horario y con gusto te ayudamos 🙌\n\n"
-                    "Escribe *menu* para volver al inicio.")
-                return
-            sesion["estado"] = S_SEG_SUBCATEGORIA
-            await enviar_mensaje(numero,
-                "🛡️ *Seguridad & Saneamiento*\n\n"
-                "¿Qué servicio necesitas?\n\n"
-                "1️⃣ Extintores (venta / recarga)\n"
-                "2️⃣ Señalización de seguridad\n"
-                "3️⃣ Fumigación / Control de plagas\n"
-                "4️⃣ Capacitación y Defensa Civil\n"
-                "5️⃣ Otro servicio\n"
-                "0️⃣ Volver al menú principal" + NAV)
+            await enrutar_categoria(numero, sesion, "SEGURIDAD")
         elif texto == "0":
             sesiones.pop(numero, None)
             historial_ia.pop(numero, None)
@@ -2837,15 +2930,29 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "Cuando necesites algo escribe *hola* o *menu*.\n\n"
                 "_El Cuervo — servicios locales siempre a tu disposición_ 🦅")
         else:
-            resp = await respuesta_ia(numero, texto)
-            datos["ultima_consulta"] = texto
-            datos["ultima_respuesta"] = resp
-            sesion["estado"] = S_CONSULTA_OPCION
-            await enviar_mensaje(numero,
-                f"{resp}\n\n━━━━━━━━━━━━━━━━━━\n"
-                "¿Qué deseas hacer?\n\n"
-                "1️⃣ Hacer una solicitud ahora\n"
-                "2️⃣ Hablar con un operador 👤")
+            # Enrutador inteligente: detecta la intención del texto libre
+            categoria = await clasificar_intencion(texto)
+            print(f"[INTENCION] {numero}: '{texto}' -> {categoria}", flush=True)
+
+            if categoria == "TRANSPORTE":
+                await enrutar_categoria(numero, sesion, "TRANSPORTE",
+                    prefijo="🚖 ¡Claro! Te llevo a *Transporte*.\n\n")
+            elif categoria == "GASTRONOMIA":
+                await enrutar_categoria(numero, sesion, "GASTRONOMIA",
+                    prefijo="🍽️ ¡Buenísimo! Te llevo a *Gastronomía*.\n\n")
+            elif categoria == "SEGURIDAD":
+                await enrutar_categoria(numero, sesion, "SEGURIDAD",
+                    prefijo="🛡️ Entendido. Te llevo a *Seguridad & Saneamiento*.\n\n")
+            else:
+                resp = await respuesta_ia(numero, texto)
+                datos["ultima_consulta"] = texto
+                datos["ultima_respuesta"] = resp
+                sesion["estado"] = S_CONSULTA_OPCION
+                await enviar_mensaje(numero,
+                    f"{resp}\n\n━━━━━━━━━━━━━━━━━━\n"
+                    "¿Qué deseas hacer?\n\n"
+                    "1️⃣ Hacer una solicitud ahora\n"
+                    "2️⃣ Hablar con un operador 👤")
 
     # ══ TRANSPORTE (Barranca Móvil) ═══════════════════════════════════════════
     elif estado == S_TRANSPORTE_MENU:
