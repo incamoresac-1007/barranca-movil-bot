@@ -1118,6 +1118,109 @@ async def coords_a_direccion(lat, lng) -> str:
         print(f"[GEOCODE ERROR] {e}", flush=True)
     return None  # None indica fallo, no devolver coordenadas
 
+
+# ── Capa de direcciones (limpieza + agente + GPS) ─────────────────────────────
+_VIAS_DIRECCION = {
+    "calle", "ca", "ca.", "jr", "jr.", "jiron", "jirón", "av", "av.", "avenida",
+    "urb", "urb.", "urbanizacion", "urbanización", "pasaje", "psje", "psje.",
+    "mz", "mz.", "manzana", "barrio", "prolongacion", "prolongación", "carretera",
+    "plaza", "plazuela", "parque", "sector", "caserio", "caserío", "anexo", "block",
+}
+_ABREV_DIRECCION = {
+    "jr": "Jr.", "jr.": "Jr.", "av": "Av.", "av.": "Av.", "ca": "Ca.", "ca.": "Ca.",
+    "urb": "Urb.", "urb.": "Urb.", "mz": "Mz.", "mz.": "Mz.", "psje": "Psje.",
+    "psje.": "Psje.", "jiron": "Jirón",
+}
+
+
+def capitalizar_direccion(texto: str) -> str:
+    """Capitaliza una dirección (sin la lógica de nombres que deja 'el/la' en
+    minúscula). 'el lino' → 'El Lino', 'av grau' → 'Av. Grau'."""
+    txt = " ".join((texto or "").strip().split())
+    if not txt:
+        return ""
+    out = []
+    for p in txt.split():
+        pl = p.lower()
+        if pl in _ABREV_DIRECCION:
+            out.append(_ABREV_DIRECCION[pl])
+        elif any(ch.isdigit() for ch in p):
+            out.append(p)  # números/alfanuméricos tal cual
+        else:
+            out.append(p.capitalize())
+    return " ".join(out)
+
+
+def _direccion_pobre(texto: str) -> bool:
+    """True si la dirección se ve incompleta/ambigua (vale la pena pasarla al agente)."""
+    palabras = (texto or "").lower().split()
+    if len(palabras) < 3:
+        return True
+    return not any(v in palabras for v in _VIAS_DIRECCION)
+
+
+async def _agente_corregir_direccion(texto: str) -> str:
+    """Agente (Claude): formatea/completa una dirección sin inventar datos. '' si no aplica."""
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return ""
+    sys = (
+        "Corrige y formatea una dirección en Barranca, Perú. "
+        "Devuelve SOLO la dirección corregida en una línea, sin comillas ni explicaciones. "
+        "Agrega el tipo de vía si es evidente (Calle, Jr., Av., Urb.), corrige mayúsculas "
+        "y añade ', Barranca' si no menciona la ciudad. "
+        "NO inventes números de casa ni datos que la persona no escribió; si algo no está, "
+        "no lo agregues. Si ya está bien, devuélvela igual. "
+        "Ejemplo: 'el lino' → 'Calle El Lino, Barranca'."
+    )
+
+    def _claude():
+        return httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 80,
+                  "system": sys, "messages": [{"role": "user", "content": texto}]},
+            timeout=6.0,
+        )
+
+    try:
+        r = await asyncio.to_thread(_claude)
+        if r.status_code >= 400:
+            print(f"[AGENTE ERROR] direccion status={r.status_code} {r.text[:150]}", flush=True)
+            return ""
+        data = r.json()
+        out = "".join(
+            b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
+        ).strip().strip('"').strip()
+        return out[:120]
+    except Exception as e:
+        print(f"[AGENTE ERROR] direccion: {e}", flush=True)
+        return ""
+
+
+async def limpiar_direccion(texto: str) -> str:
+    """Capa central de direcciones de texto libre:
+    1) capitaliza (gratis); 2) si se ve pobre, el agente la corrige; 3) red de seguridad."""
+    base = capitalizar_direccion(texto)
+    if not base:
+        return ""
+    if _direccion_pobre(texto):
+        corregida = await _agente_corregir_direccion(texto)
+        if corregida:
+            print(f"[AGENTE] direccion '{texto}' -> '{corregida}'", flush=True)
+            return corregida
+    return base
+
+
+async def direccion_desde_gps(lat, lng) -> str:
+    """Convierte coordenadas a dirección legible + link de Maps. Nunca deja números crudos."""
+    legible = await coords_a_direccion(lat, lng)
+    link = f"https://maps.google.com/?q={lat},{lng}"
+    if legible:
+        return f"{legible} (📍 {link})"
+    return f"Ubicación compartida 📍 {link}"
+
 # Coordenadas centro de Barranca para bias de búsqueda
 BARRANCA_LAT = -10.7511
 BARRANCA_LNG = -77.7625
@@ -1722,8 +1825,8 @@ async def resolver_direccion(texto: str, sesion: dict, datos: dict, numero: str,
         sug = unicas[0]
         direccion, coords = await coords_de_place_id(sug["place_id"], sug["nombre"])
     else:
-        # 0 resultados → aceptar lo que escribió el cliente (sin coordenadas)
-        direccion, coords = normalizar_nombre_persona(texto.strip()), ""
+        # 0 resultados → aceptar lo que escribió el cliente, limpiado por la capa de direcciones
+        direccion, coords = await limpiar_direccion(texto), ""
 
     # Avanzar según el paso
     if label_confirm == "recojo":
@@ -3637,6 +3740,19 @@ async def procesar(numero: str, tipo: str, contenido: dict):
     elif estado == S_EDU_NIVEL:
         mapa = {"1": "PRIMARIA", "2": "SECUNDARIA", "3": "PREUNIVERSITARIO"}
         if texto not in mapa:
+            # Salida elegante: si pide nivel universitario/superior (fuera de alcance)
+            t = (texto or "").lower()
+            if any(w in t for w in ["universi", "superior", "instituto", "carrera",
+                                    "calculo", "cálculo", "contabilidad", "ingenieria",
+                                    "ingeniería", "ceba"]):
+                print(f"[DEMANDA] educacion superior solicitada por {numero}: '{texto}'", flush=True)
+                await enviar_mensaje(numero,
+                    "🙏 Por ahora ofrecemos *reforzamiento escolar* (primaria a preuniversitario). "
+                    "Aún no contamos con profesores de nivel universitario/superior — "
+                    "pero anoté tu interés para sumarlo pronto.\n\n"
+                    "¿Te ayudamos con alguno de estos niveles?\n"
+                    "1️⃣ Primaria\n2️⃣ Secundaria\n3️⃣ Preuniversitario" + NAV)
+                return
             await enviar_mensaje(numero,
                 "Elige *1* Primaria, *2* Secundaria o *3* Preuniversitario." + NAV)
             return
@@ -3662,13 +3778,15 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     elif estado == S_EDU_DIRECCION:
         if tipo == "location" and isinstance(contenido, dict):
-            direccion = f"GPS: {contenido.get('latitude')},{contenido.get('longitude')}"
+            direccion = await direccion_desde_gps(contenido.get("latitude"), contenido.get("longitude"))
+        elif lat and lng:
+            direccion = await direccion_desde_gps(lat, lng)
         else:
-            direccion = (texto or "").strip()
-        if len(direccion) < 4:
-            await enviar_mensaje(numero,
-                "Por favor escribe la dirección o comparte tu ubicación 📌." + NAV)
-            return
+            if not (texto or "").strip() or len((texto or "").strip()) < 3:
+                await enviar_mensaje(numero,
+                    "Por favor escribe la dirección o comparte tu ubicación 📌." + NAV)
+                return
+            direccion = await limpiar_direccion(texto)
         datos["edu_direccion"] = direccion
         await _edu_siguiente_paso(numero, sesion)
 
@@ -4704,7 +4822,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             sugerencias = await buscar_lugares_barranca(texto)
             if not sugerencias:
                 # Barranca mal indexado → aceptar texto libre
-                direccion = normalizar_nombre_persona(texto.strip())
+                direccion = await limpiar_direccion(texto)
                 datos["enc_origen"] = direccion
                 sesion["estado"] = S_ENCOMIENDA_DESTINO
                 await enviar_mensaje(numero,
@@ -4757,7 +4875,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 datos.pop("_sugerencias", None)
             sugerencias = await buscar_lugares_peru(texto)
             if not sugerencias:
-                direccion = normalizar_nombre_persona(texto.strip())
+                direccion = await limpiar_direccion(texto)
                 datos["enc_destino_temp"] = direccion
                 sesion["estado"] = S_ENCOMIENDA_CONFIRM_DEST
                 await enviar_mensaje(numero,
@@ -4803,7 +4921,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             sesion["estado"] = S_ENCOMIENDA_DESTINO
             sugerencias = await buscar_lugares_peru(texto)
             if not sugerencias:
-                direccion = normalizar_nombre_persona(texto.strip())
+                direccion = await limpiar_direccion(texto)
                 datos["enc_destino_temp"] = direccion
                 sesion["estado"] = S_ENCOMIENDA_CONFIRM_DEST
                 await enviar_mensaje(numero,
@@ -5150,7 +5268,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 datos.pop("_sugerencias", None)
             sugerencias = await buscar_lugares_barranca(texto)
             if not sugerencias:
-                direccion = normalizar_nombre_persona(texto.strip())
+                direccion = await limpiar_direccion(texto)
                 datos["recojo_temp"] = direccion
                 datos["_esperando_confirm_recojo"] = True
                 await enviar_mensaje(numero,
