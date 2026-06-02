@@ -287,7 +287,7 @@ PROMPT_VOLVER = {
     S_SEG_URGENCIA:       "⏰ *¿Con qué urgencia necesitas el servicio?*\n1️⃣ Urgente — lo antes posible\n2️⃣ Programar — elegir fecha y hora\n0️⃣ Volver",
     # Educación
     S_EDU_PARA_QUIEN:     "📚 *¿Para quién es la clase?*\n1️⃣ Para mí (soy mayor de edad)\n2️⃣ Para un menor a mi cargo\n0️⃣ Volver",
-    S_EDU_NOMBRE:         "🙋 *Escribe tu nombre y DNI* _(apoderado)_\nEjemplo: Cesar Calvo 12345678",
+    S_EDU_NOMBRE:         "🙋 *Escribe tu nombre y DNI* _(apoderado)_\nEjemplo: Victor Calixto 12345678",
     S_EDU_ALUMNO:         "👦 *¿Nombre del alumno/a?*",
     S_EDU_NIVEL:          "🎓 *¿Qué nivel?*\n1️⃣ Primaria\n2️⃣ Secundaria\n3️⃣ Preuniversitario",
     S_EDU_MATERIA:        "📖 *¿Qué materia o tema necesita reforzar?*\n_(Ej: fracciones, álgebra, comunicación)_",
@@ -1700,75 +1700,77 @@ def _dedup_sugerencias(sugerencias: list) -> list:
 async def resolver_direccion(texto: str, sesion: dict, datos: dict, numero: str,
                               key_temp: str, key_coords: str, estado_confirmar: str,
                               label_confirm: str):
-    """Helper: busca con autocomplete tipo Waze.
+    """Busca con autocomplete tipo Waze.
     1 resultado unico  → auto-confirma y avanza directo (sin preguntar)
     2-4 resultados     → lista, usuario elige y va DIRECTO
-    0 resultados       → error"""
+    0 resultados       → ACEPTA el texto libre tal cual (Barranca está mal indexado
+                         en Google; la ubicación la resuelve el conductor o el GPS)."""
     sugerencias = await buscar_lugares_barranca(texto)
-    if not sugerencias:
-        await enviar_mensaje(numero, MSG_NO_ENCONTRADO)
-        return
+    unicas = _dedup_sugerencias(sugerencias) if sugerencias else []
 
-    unicas = _dedup_sugerencias(sugerencias)
-
-    if len(unicas) == 1:
-        # Un solo lugar → auto-confirmar sin preguntar
-        sug = unicas[0]
-        direccion, coords = await coords_de_place_id(sug["place_id"], sug["nombre"])
-        if label_confirm == "recojo":
-            datos["recojo_texto"] = direccion
-            datos["recojo_coords"] = coords
-            sesion["estado"] = S_DESTINO
-            await enviar_mensaje(numero,
-                f"✅ Recojo: *{direccion}*\n\n"
-                "🏁 *¿A dónde vas?*\n\n"
-                "• 📌 Comparte ubicación del destino\n"
-                "• ✍️ O escribe el destino" + NAV)
-        elif label_confirm == "destino":
-            datos["destino_texto"] = direccion
-            datos["destino_coords"] = coords
-            km = await calcular_distancia_km(datos.get("recojo_coords", ""), coords)
-            if km is None:
-                datos.update({"tarifa": "a coordinar", "tarifa_detalle": "coord. conductor", "km": 0})
-                sesion["estado"] = S_PAGO
-                await enviar_mensaje(numero,
-                    f"📋 *Resumen:*\n\n"
-                    f"👤 {datos['nombre']}\n📍 {datos['recojo_texto']}\n"
-                    f"🏁 {datos['destino_texto']}\n"
-                    f"💰 Tarifa: *a coordinar con el conductor*\n\n"
-                    "💳 *¿Cómo pagas?*\n1️⃣ Efectivo\n2️⃣ Yape" + NAV)
-            else:
-                tarifa, detalle = calcular_tarifa_taxi(datos["destino_texto"], km)
-                datos.update({"tarifa": tarifa, "tarifa_detalle": detalle, "km": km})
-                sesion["estado"] = S_PAGO
-                await enviar_mensaje(numero,
-                    f"📋 *Resumen:*\n\n"
-                    f"👤 {datos['nombre']}\n📍 {datos['recojo_texto']}\n"
-                    f"🏁 {datos['destino_texto']}\n📏 {km:.1f} km\n"
-                    f"💰 Tarifa estimada: *S/{tarifa}* ({detalle})\n\n"
-                    "💳 *¿Cómo pagas?*\n1️⃣ Efectivo\n2️⃣ Yape" + NAV)
-        elif label_confirm == "colectivo_recojo":
-            datos["colectivo_recojo"] = direccion
-            sesion["estado"] = S_COLECTIVO_PAGO
-            await enviar_mensaje(numero,
-                f"✅ Recojo: *{direccion}*\n\n"
-                "💳 *¿Cómo pagas?*\n1️⃣ Efectivo\n2️⃣ Yape" + NAV)
-        else:
-            # fallback generico
-            datos[key_temp] = direccion
-            datos[key_coords] = coords
-            sesion["estado"] = estado_confirmar
-            await enviar_mensaje(numero,
-                f"📍 *{direccion}*\n\n¿Es correcto?\n1️⃣ Sí\n2️⃣ No, escribir otra")
-    else:
-        # Varias opciones distintas → mostrar lista
+    # Varias opciones → mostrar lista y esperar elección
+    if len(unicas) >= 2:
         numeros = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
         opciones_txt = "\n".join([f"{numeros[i]} {s['nombre'].split(',')[0]}" for i, s in enumerate(unicas)])
         datos["_sugerencias"] = unicas
         await enviar_mensaje(numero,
-            f"📍 ¿Cuál de estas?\n\n"
-            f"{opciones_txt}\n\n"
-            f"_(O escribe otra dirección)_")
+            f"📍 ¿Cuál de estas?\n\n{opciones_txt}\n\n_(O escribe otra dirección)_")
+        return
+
+    # Determinar dirección y coordenadas
+    if len(unicas) == 1:
+        sug = unicas[0]
+        direccion, coords = await coords_de_place_id(sug["place_id"], sug["nombre"])
+    else:
+        # 0 resultados → aceptar lo que escribió el cliente (sin coordenadas)
+        direccion, coords = normalizar_nombre_persona(texto.strip()), ""
+
+    # Avanzar según el paso
+    if label_confirm == "recojo":
+        datos["recojo_texto"] = direccion
+        datos["recojo_coords"] = coords
+        sesion["estado"] = S_DESTINO
+        await enviar_mensaje(numero,
+            f"✅ Recojo: *{direccion}*\n\n"
+            "🏁 *¿A dónde vas?*\n\n"
+            "• 📌 Comparte ubicación del destino\n"
+            "• ✍️ O escribe el destino" + NAV)
+    elif label_confirm == "destino":
+        datos["destino_texto"] = direccion
+        datos["destino_coords"] = coords
+        km = await calcular_distancia_km(datos.get("recojo_coords", ""), coords) if coords else None
+        if km is None:
+            datos.update({"tarifa": "a coordinar", "tarifa_detalle": "coord. conductor", "km": 0})
+            sesion["estado"] = S_PAGO
+            await enviar_mensaje(numero,
+                f"📋 *Resumen:*\n\n"
+                f"👤 {datos['nombre']}\n📍 {datos['recojo_texto']}\n"
+                f"🏁 {datos['destino_texto']}\n"
+                f"💰 Tarifa: *a coordinar con el conductor*\n\n"
+                "💳 *¿Cómo pagas?*\n1️⃣ Efectivo\n2️⃣ Yape" + NAV)
+        else:
+            tarifa, detalle = calcular_tarifa_taxi(datos["destino_texto"], km)
+            datos.update({"tarifa": tarifa, "tarifa_detalle": detalle, "km": km})
+            sesion["estado"] = S_PAGO
+            await enviar_mensaje(numero,
+                f"📋 *Resumen:*\n\n"
+                f"👤 {datos['nombre']}\n📍 {datos['recojo_texto']}\n"
+                f"🏁 {datos['destino_texto']}\n📏 {km:.1f} km\n"
+                f"💰 Tarifa estimada: *S/{tarifa}* ({detalle})\n\n"
+                "💳 *¿Cómo pagas?*\n1️⃣ Efectivo\n2️⃣ Yape" + NAV)
+    elif label_confirm == "colectivo_recojo":
+        datos["colectivo_recojo"] = direccion
+        sesion["estado"] = S_COLECTIVO_PAGO
+        await enviar_mensaje(numero,
+            f"✅ Recojo: *{direccion}*\n\n"
+            "💳 *¿Cómo pagas?*\n1️⃣ Efectivo\n2️⃣ Yape" + NAV)
+    else:
+        # fallback generico
+        datos[key_temp] = direccion
+        datos[key_coords] = coords
+        sesion["estado"] = estado_confirmar
+        await enviar_mensaje(numero,
+            f"📍 *{direccion}*\n\n¿Es correcto?\n1️⃣ Sí\n2️⃣ No, escribir otra")
 
 async def calcular_distancia_km(origen: str, destino: str) -> float:
     url = "https://maps.googleapis.com/maps/api/distancematrix/json"
@@ -1953,7 +1955,7 @@ async def _edu_siguiente_paso(numero: str, sesion: dict):
         aviso = ("👨‍👩‍👧 Como la clase es para un menor, *tú (apoderado) coordinas y debes "
                  "estar presente durante la clase*.\n\n" if d.get("edu_para_menor") else "")
         await enviar_mensaje(numero,
-            aviso + "🙋 Escribe tu *nombre y DNI*.\nEjemplo: *Cesar Calvo 12345678*" + NAV)
+            aviso + "🙋 Escribe tu *nombre y DNI*.\nEjemplo: *Victor Calixto 12345678*" + NAV)
         return
 
     # 3) Nombre del alumno (solo si es para un menor)
@@ -3618,7 +3620,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         nombre, dni = extraer_nombre_dni(texto)
         if not dni or len(nombre) < 3:
             await enviar_mensaje(numero,
-                "Necesito tu *nombre y DNI* juntos.\nEjemplo: *Cesar Calvo 12345678*" + NAV)
+                "Necesito tu *nombre y DNI* juntos.\nEjemplo: *Victor Calixto 12345678*" + NAV)
             return
         datos["nombre"] = nombre
         datos["edu_dni"] = dni
@@ -4701,7 +4703,15 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 datos.pop("_sugerencias", None)
             sugerencias = await buscar_lugares_barranca(texto)
             if not sugerencias:
-                await enviar_mensaje(numero, MSG_NO_ENCONTRADO)
+                # Barranca mal indexado → aceptar texto libre
+                direccion = normalizar_nombre_persona(texto.strip())
+                datos["enc_origen"] = direccion
+                sesion["estado"] = S_ENCOMIENDA_DESTINO
+                await enviar_mensaje(numero,
+                    f"✅ Recojo: *{direccion}*\n\n"
+                    "🏁 *¿A qué dirección lo enviamos?*\n\n"
+                    "• 📌 Comparte ubicación del destino\n"
+                    "• ✍️ O escribe la dirección")
             elif len(sugerencias) == 1:
                 sug = sugerencias[0]
                 direccion, coords = await coords_de_place_id(sug["place_id"], sug["nombre"])
@@ -4747,10 +4757,14 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 datos.pop("_sugerencias", None)
             sugerencias = await buscar_lugares_peru(texto)
             if not sugerencias:
+                direccion = normalizar_nombre_persona(texto.strip())
+                datos["enc_destino_temp"] = direccion
+                sesion["estado"] = S_ENCOMIENDA_CONFIRM_DEST
                 await enviar_mensaje(numero,
-                    "❌ No encontré esa dirección.\n\n"
-                    "Intenta con más detalle:\n"
-                    "_(Ej: Panteón Chino Paramonga, Av. Lima Huacho)_")
+                    f"📍 Destino: *{direccion}*\n\n"
+                    "¿Es correcto?\n"
+                    "1️⃣ Sí\n"
+                    "2️⃣ No, escribir otra dirección")
             elif len(sugerencias) == 1:
                 sug = sugerencias[0]
                 direccion, coords = await coords_de_place_id(sug["place_id"], sug["nombre"])
@@ -4789,9 +4803,12 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             sesion["estado"] = S_ENCOMIENDA_DESTINO
             sugerencias = await buscar_lugares_peru(texto)
             if not sugerencias:
+                direccion = normalizar_nombre_persona(texto.strip())
+                datos["enc_destino_temp"] = direccion
+                sesion["estado"] = S_ENCOMIENDA_CONFIRM_DEST
                 await enviar_mensaje(numero,
-                    "❌ No encontré esa dirección.\n\n"
-                    "_(Ej: Panteón Chino Paramonga, Av. Lima Huacho)_")
+                    f"📍 Destino: *{direccion}*\n\n"
+                    "¿Es correcto?\n1️⃣ Sí\n2️⃣ No, escribir otra dirección")
             elif len(sugerencias) == 1:
                 sug = sugerencias[0]
                 direccion, coords = await coords_de_place_id(sug["place_id"], sug["nombre"])
@@ -5133,7 +5150,12 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 datos.pop("_sugerencias", None)
             sugerencias = await buscar_lugares_barranca(texto)
             if not sugerencias:
-                await enviar_mensaje(numero, MSG_NO_ENCONTRADO)
+                direccion = normalizar_nombre_persona(texto.strip())
+                datos["recojo_temp"] = direccion
+                datos["_esperando_confirm_recojo"] = True
+                await enviar_mensaje(numero,
+                    f"📍 *{direccion}*\n\n"
+                    "¿Es correcto?\n1️⃣ Sí\n2️⃣ No, escribir otra")
                 return
             elif len(sugerencias) == 1:
                 sug = sugerencias[0]
