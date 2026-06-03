@@ -319,9 +319,11 @@ CONDUCTORES = {
 #   niveles:   PRIMARIA / SECUNDARIA / PREUNIVERSITARIO
 #   modalidad: presencial / virtual
 PROFESORES = {
-    # "51900000001": {"nombre": "Ejemplo Profesor",
-    #                 "niveles": ["PRIMARIA", "SECUNDARIA"],
-    #                 "modalidad": ["presencial", "virtual"]},
+    # IMPORTANTE: solo profesores verificados (DNI + antecedentes revisados FUERA del bot).
+    # No guardar aquí datos sensibles de la verificación, solo lo operativo.
+    "51981469530": {"nombre": "Zoila Tello Manrique",
+                    "niveles": ["PRIMARIA"],
+                    "modalidad": ["presencial", "virtual"]},
 }
 
 # Tarifas de Educación por HORA en soles. Edita estos montos cuando quieras.
