@@ -5859,6 +5859,210 @@ async def get_proveedores(clave: str = ""):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error leyendo registros: {e}")
 
+DASHBOARD_HTML = r'''<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Panel El Cuervo</title>
+<style>
+  * { box-sizing: border-box; margin:0; padding:0; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0a0b10; color:#e9e9ef; padding:18px; }
+  .top { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:18px; border-bottom:1px solid #23242e; padding-bottom:14px; }
+  .brand { display:flex; align-items:center; gap:12px; }
+  .brand .logo { width:44px; height:44px; border-radius:50%; background:#15161d; border:2px solid #e8b04b; display:flex; align-items:center; justify-content:center; font-size:22px; }
+  .brand h1 { font-size:20px; font-weight:700; letter-spacing:1px; }
+  .brand h1 span { color:#e8b04b; }
+  .brand p { font-size:12px; color:#8b8c98; }
+  .live { display:flex; align-items:center; gap:8px; font-size:12px; color:#9a9ba6; }
+  .dot { width:9px; height:9px; border-radius:50%; background:#27c08a; animation:pulse 1.8s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(39,192,138,.5)} 70%{box-shadow:0 0 0 9px rgba(39,192,138,0)} 100%{box-shadow:0 0 0 0 rgba(39,192,138,0)} }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:22px; }
+  .kpi { background:linear-gradient(160deg,#16171f,#101117); border:1px solid #23242e; border-radius:14px; padding:16px; position:relative; overflow:hidden; }
+  .kpi::before { content:""; position:absolute; top:0; left:0; width:3px; height:100%; background:#e8b04b; }
+  .kpi .v { font-size:30px; font-weight:800; color:#f4d58d; }
+  .kpi .l { font-size:11px; color:#9a9ba6; margin-top:4px; text-transform:uppercase; letter-spacing:.5px; }
+  .kpi.alert .v { color:#ff7a7a; }
+  .kpi.alert::before { background:#c0392b; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; }
+  .card { background:#13141b; border:1px solid #23242e; border-radius:14px; padding:16px; }
+  .card h2 { font-size:14px; text-transform:uppercase; letter-spacing:1px; color:#e8b04b; margin-bottom:12px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; color:#8b8c98; font-weight:600; padding:8px 6px; border-bottom:1px solid #23242e; font-size:11px; text-transform:uppercase; }
+  td { padding:9px 6px; border-bottom:1px solid #1b1c24; }
+  tr:last-child td { border-bottom:none; }
+  .badge { display:inline-block; padding:3px 9px; border-radius:20px; font-size:11px; font-weight:600; }
+  .b-on { background:rgba(39,192,138,.15); color:#27c08a; }
+  .b-off { background:rgba(120,120,130,.15); color:#9a9ba6; }
+  .b-viaje { background:rgba(232,176,75,.15); color:#e8b04b; }
+  .b-pend { background:rgba(192,57,43,.18); color:#ff7a7a; }
+  .pill { display:inline-block; background:#1d1e27; color:#cfcfd6; padding:2px 8px; border-radius:6px; font-size:11px; margin:2px 4px 2px 0; }
+  .empty { color:#6a6b76; font-size:13px; padding:14px 0; text-align:center; }
+  .foot { margin-top:20px; text-align:center; color:#5a5b66; font-size:12px; }
+  .err { background:#2a1414; border:1px solid #5a2a2a; color:#ff9a9a; padding:14px; border-radius:10px; text-align:center; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand">
+      <div class="logo">&#129413;</div>
+      <div><h1>Panel <span>El Cuervo</span></h1><p>Centro de control &middot; Barranca</p></div>
+    </div>
+    <div class="live"><span class="dot"></span> En vivo &middot; <span id="upd">cargando&hellip;</span></div>
+  </div>
+  <div id="root"><p class="empty">Cargando datos&hellip;</p></div>
+  <div class="foot">El Cuervo &#129413; &middot; actualizaci&oacute;n autom&aacute;tica cada 10 s</div>
+<script>
+const clave = new URLSearchParams(location.search).get('clave') || '';
+const $ = s => document.querySelector(s);
+function card(title, body){ return `<div class="card"><h2>${title}</h2>${body}</div>`; }
+function render(d){
+  const k = d.kpis;
+  const kpi = (v,l,alert)=>`<div class="kpi ${alert?'alert':''}"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  let html = `<div class="kpis">
+    ${kpi(k.solicitudes_en_curso + k.clases_en_curso,'Solicitudes en curso', (k.solicitudes_en_curso+k.clases_en_curso)>0)}
+    ${kpi(k.conductores_activos+'/'+k.conductores_total,'Conductores activos')}
+    ${kpi(k.profesores_total,'Profesores')}
+    ${kpi(k.proveedores_total,'Proveedores')}
+    ${kpi(k.proveedores_pendientes,'Por validar', k.proveedores_pendientes>0)}
+    ${kpi(k.tickets_nuevos,'Tickets nuevos', k.tickets_nuevos>0)}
+    ${kpi(k.sesiones_activas,'Chats activos')}
+  </div>`;
+  let cond = '<table><tr><th>Conductor</th><th>Placa</th><th>Estado</th></tr>';
+  d.conductores.forEach(c=>{
+    let est = c.en_viaje? '<span class="badge b-viaje">En viaje</span>' : (c.activo? '<span class="badge b-on">Activo</span>':'<span class="badge b-off">Pausado</span>');
+    cond += `<tr><td>${c.nombre}</td><td>${c.placa}</td><td>${est}</td></tr>`;
+  });
+  cond += '</table>';
+  let prof = d.profesores.length? '<table><tr><th>Profesor</th><th>Niveles</th><th>Modalidad</th></tr>' : '';
+  d.profesores.forEach(p=>{
+    const niv = (p.niveles||[]).map(n=>`<span class="pill">${n}</span>`).join('');
+    const mod = (p.modalidad||[]).map(m=>`<span class="pill">${m}</span>`).join('');
+    prof += `<tr><td>${p.nombre}</td><td>${niv}</td><td>${mod}</td></tr>`;
+  });
+  prof += d.profesores.length? '</table>' : '<p class="empty">Sin profesores registrados</p>';
+  let pt = Object.entries(d.proveedores_por_tipo).map(([t,n])=>`<span class="pill">${t.split('(')[0].trim()}: ${n}</span>`).join(' ');
+  let prov = pt? `<div style="margin-bottom:10px">${pt}</div>` : '';
+  if(d.proveedores.length){
+    prov += '<table><tr><th>Nombre</th><th>Tipo</th><th>Detalle</th><th>Estado</th></tr>';
+    d.proveedores.forEach(p=>{
+      let det = p.negocio || p.placa || p.detalle || '&mdash;';
+      let badge = p.estado==='PENDIENTE_VALIDACION'? '<span class="badge b-pend">Por validar</span>':'<span class="badge b-on">OK</span>';
+      prov += `<tr><td>${p.nombre||'&mdash;'}</td><td>${(p.tipo||'').split('(')[0].trim()}</td><td>${det}</td><td>${badge}</td></tr>`;
+    });
+    prov += '</table>';
+  } else { prov += '<p class="empty">Sin registros a&uacute;n</p>'; }
+  let tk = `<div style="margin-bottom:10px"><span class="pill">Nuevos: ${d.tickets.nuevos}</span><span class="pill">En proceso: ${d.tickets.en_proceso}</span><span class="pill">Resueltos: ${d.tickets.resueltos}</span></div>`;
+  if(d.tickets.lista.length){
+    tk += '<table><tr><th>ID</th><th>Estado</th></tr>';
+    d.tickets.lista.forEach(t=>{ tk += `<tr><td>${t.id||'&mdash;'}</td><td>${t.estado||''}</td></tr>`; });
+    tk += '</table>';
+  } else { tk += '<p class="empty">Sin tickets</p>'; }
+  html += '<div class="grid">'
+    + card('Conductores', cond)
+    + card('Profesores', prof)
+    + card('Proveedores registrados', prov)
+    + card('Tickets / Reclamos', tk)
+    + '</div>';
+  $('#root').innerHTML = html;
+  $('#upd').textContent = d.actualizado;
+}
+async function load(){
+  try{
+    const r = await fetch('/api/dashboard?clave='+encodeURIComponent(clave));
+    if(!r.ok){ $('#root').innerHTML = '<div class="err">Acceso denegado o error ('+r.status+'). Verifica la clave en la URL.</div>'; return; }
+    render(await r.json());
+  }catch(e){ $('#root').innerHTML = '<div class="err">No se pudo cargar: '+e+'</div>'; }
+}
+load();
+setInterval(load, 10000);
+</script>
+</body>
+</html>'''
+
+
+@app.get("/dashboard")
+async def dashboard_page(clave: str = ""):
+    from fastapi.responses import HTMLResponse
+    if clave != ADMIN_KEY:
+        return HTMLResponse('<body style="background:#0a0b10;color:#ff9a9a;font-family:sans-serif;text-align:center;padding:60px"><h2>Acceso denegado</h2><p>Agrega ?clave=TU_CLAVE a la URL.</p></body>', status_code=403)
+    return HTMLResponse(DASHBOARD_HTML)
+
+
+@app.get("/api/dashboard")
+async def api_dashboard(clave: str = ""):
+    """Datos en vivo para el dashboard. Requiere ?clave=ADMIN_KEY."""
+    if clave != ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Clave incorrecta")
+
+    # Proveedores (desde disco)
+    proveedores = []
+    try:
+        if os.path.exists(PROVEEDORES_FILE):
+            with open(PROVEEDORES_FILE, "r", encoding="utf-8") as f:
+                proveedores = json.load(f) or []
+    except Exception:
+        proveedores = []
+    prov_por_tipo = {}
+    for p in proveedores:
+        t = p.get("tipo", "Otro")
+        prov_por_tipo[t] = prov_por_tipo.get(t, 0) + 1
+
+    # Conductores
+    conductores = []
+    activos = 0
+    for num, info in CONDUCTORES.items():
+        estado_act = conductores_estado.get(num, False)
+        if estado_act:
+            activos += 1
+        conductores.append({
+            "nombre": info.get("nombre", ""),
+            "placa": info.get("placa", ""),
+            "telefono": num,
+            "activo": bool(estado_act),
+            "en_viaje": num in viajes_activos,
+        })
+
+    # Profesores
+    profesores = [{
+        "nombre": info.get("nombre", ""),
+        "niveles": info.get("niveles", []),
+        "modalidad": info.get("modalidad", []),
+        "telefono": num,
+    } for num, info in PROFESORES.items()]
+
+    # Tickets
+    tk_nuevos = sum(1 for t in tickets if t.get("estado") == "nuevo")
+    tk_proceso = sum(1 for t in tickets if t.get("estado") == "en_proceso")
+    tk_resueltos = sum(1 for t in tickets if t.get("estado") == "resuelto")
+
+    # Sesiones activas ahora
+    sesiones_activas = sum(1 for s in sesiones.values() if s.get("estado") not in (S_MENU, None))
+
+    return {
+        "kpis": {
+            "proveedores_total": len(proveedores),
+            "proveedores_pendientes": sum(1 for p in proveedores if p.get("estado") == "PENDIENTE_VALIDACION"),
+            "conductores_total": len(CONDUCTORES),
+            "conductores_activos": activos,
+            "profesores_total": len(PROFESORES),
+            "tickets_total": len(tickets),
+            "tickets_nuevos": tk_nuevos,
+            "solicitudes_en_curso": len(servicios_pendientes),
+            "clases_en_curso": len(clases_pendientes),
+            "sesiones_activas": sesiones_activas,
+        },
+        "proveedores_por_tipo": prov_por_tipo,
+        "proveedores": list(reversed(proveedores))[:50],
+        "conductores": conductores,
+        "profesores": profesores,
+        "tickets": {
+            "nuevos": tk_nuevos, "en_proceso": tk_proceso, "resueltos": tk_resueltos,
+            "lista": sorted(tickets, key=lambda x: x.get("timestamp", 0), reverse=True)[:20],
+        },
+        "actualizado": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
 @app.get("/admin/recordatorio")
 async def admin_disparar_recordatorio(clave: str = ""):
     """
