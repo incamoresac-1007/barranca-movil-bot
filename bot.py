@@ -3260,6 +3260,24 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             datos.pop("_sugerencias", None)
             datos.pop("_esperando_confirm_recojo", None)
 
+            # Educación: al volver a un paso, limpiar ese dato y TODOS los siguientes
+            # (integridad: lo que viene después de lo que vas a corregir puede quedar inválido)
+            EDU_ORDEN = [
+                (S_EDU_PARA_QUIEN, ["edu_para_menor"]),
+                (S_EDU_NOMBRE,     ["nombre", "edu_dni"]),
+                (S_EDU_ALUMNO,     ["edu_alumno"]),
+                (S_EDU_NIVEL,      ["edu_nivel"]),
+                (S_EDU_MATERIA,    ["edu_materia"]),
+                (S_EDU_MODALIDAD,  ["edu_modalidad"]),
+                (S_EDU_DIRECCION,  ["edu_direccion"]),
+            ]
+            _estados_edu = [e for e, _ in EDU_ORDEN]
+            if prev_estado in _estados_edu:
+                idx = _estados_edu.index(prev_estado)
+                for _, campos in EDU_ORDEN[idx:]:
+                    for c in campos:
+                        datos.pop(c, None)
+
             sesiones[numero]["estado"] = prev_estado
             if prev_estado == S_MENU:
                 sesiones[numero] = {"estado": S_MENU, "datos": {}}
