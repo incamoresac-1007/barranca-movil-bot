@@ -155,7 +155,7 @@ S_RECURRENTE_DIAS    = "RECURRENTE_DIAS"   # Días de la semana
 S_RECURRENTE_HORA    = "RECURRENTE_HORA"   # Hora del viaje recurrente
 
 # ── Estados El Cuervo ─────────────────────────────────────────────────────────
-S_TRANSPORTE_MENU    = "TRANSPORTE_MENU"   # Submenú Barranca Móvil
+S_TRANSPORTE_MENU    = "TRANSPORTE_MENU"   # Submenú El Cuervo
 
 # Gastronomía
 S_GASTRO_LISTA       = "GASTRO_LISTA"      # Lista de restaurantes
@@ -576,7 +576,7 @@ _Red inteligente de servicios locales en Barranca_
 
 O escribe tu consulta libremente 💬"""
 
-MSG_TRANSPORTE_MENU = """🚖 *Transporte — Barranca Móvil*
+MSG_TRANSPORTE_MENU = """🚖 *Transporte — El Cuervo*
 
 ¿Qué servicio necesitas?
 
@@ -643,7 +643,7 @@ MSG_EDU_HORAS = (
     "_(Escribe un número, ej: 1, 2)_" + NAV
 )
 
-MSG_TARIFAS = """💰 *Tarifas Barranca Móvil*
+MSG_TARIFAS = """💰 *Tarifas El Cuervo*
 
 🚖 *Taxi Urbano:* S/3.00 + S/1.20/km
 
@@ -1642,7 +1642,7 @@ async def verificar_activos_y_alertar_operador():
 
         mensaje = (
             "🚨 *ALERTA OPERATIVA*\\n\\n"
-            "Aún no hay conductores *ACTIVO* en Barranca Móvil.\\n\\n"
+            "Aún no hay conductores *ACTIVO* en El Cuervo.\\n\\n"
             "Hora de validación: 08:00 a. m.\\n\\n"
             "Revisa el panel CONDUCTORES o coordina manualmente con el grupo."
         )
@@ -3320,7 +3320,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         await enviar_mensaje(numero,
             "👋 *¡Hasta pronto!*\n\n"
             "Cuando necesites un servicio escribe *hola* o *1*.\n\n"
-            "_Barranca Móvil — siempre a tu servicio_ 🚖")
+            "_El Cuervo — siempre a tu servicio_ 🚖")
         return
 
     # Confirmar cancelación
@@ -3331,7 +3331,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero,
                 "👋 *¡Hasta pronto!*\n\n"
                 "Cuando necesites un servicio escribe *hola* o *1*.\n\n"
-                "_Barranca Móvil — siempre a tu servicio_ 🚖")
+                "_El Cuervo — siempre a tu servicio_ 🚖")
         else:
             datos.pop("_confirmando_salida", None)
             await enviar_mensaje(numero, "✅ Continuemos. ¿Por dónde íbamos?")
@@ -3539,13 +3539,13 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                     "1️⃣ Hacer una solicitud ahora\n"
                     "2️⃣ Hablar con un operador 👤")
 
-    # ══ TRANSPORTE (Barranca Móvil) ═══════════════════════════════════════════
+    # ══ TRANSPORTE (El Cuervo) ═══════════════════════════════════════════
     elif estado == S_TRANSPORTE_MENU:
         if texto_es_promo(texto):
             datos["promo_activa"] = True
             datos["promo_codigo"] = PROMO_CODIGO
             await enviar_mensaje(numero,
-                "🎉 *Promo de lanzamiento Barranca Móvil*\n\n"
+                "🎉 *Promo de lanzamiento El Cuervo*\n\n"
                 "🎁 *Tu primer servicio de movilidad puede salirte GRATIS*\n"
                 "💰 Valor máximo promocional: *S/7*\n"
                 "🎟️ Solo para los *10 primeros usuarios nuevos*\n\n📌 *¿Cómo funciona?*\nSi tu viaje cuesta *S/7 o menos*, te sale *GRATIS*.\nSi cuesta más de *S/7*, solo pagas la diferencia.\n\n"
@@ -5546,7 +5546,7 @@ async def update_ticket_estado(ticket_id: str, body: dict):
                 await enviar_mensaje(t["numero"],
                     f"📋 *Respuesta a tu ticket {ticket_id}*\n\n"
                     f"_{body['respuesta']}_\n\n"
-                    f"— Equipo Barranca Móvil 🚖")
+                    f"— Equipo El Cuervo 🚖")
             return {"ok": True, "ticket": t}
     raise HTTPException(status_code=404, detail="Ticket no encontrado")
 
@@ -5622,4 +5622,4 @@ async def admin_test_solicitud(clave: str = "", to: str = ""):
 
 @app.get("/")
 async def root():
-    return {"status": "El Cuervo Bot v1.0 activo 🦅 | Barranca Móvil integrado 🚖"}
+    return {"status": "El Cuervo Bot v1.0 activo 🦅 — red de servicios locales en Barranca"}
