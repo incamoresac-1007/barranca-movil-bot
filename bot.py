@@ -90,9 +90,12 @@ async def limpiar_sesiones():
 
         if numeros_limpiar:
             print(f"[CLEAN] {len(numeros_limpiar)} sesiones limpiadas", flush=True)
+        guardar_estado()
 
 @app.on_event("startup")
 async def startup():
+    cargar_estado()  # recuperar sesiones que sobrevivieron al reinicio
+    print(f"[BOT] Estado persistente: {len(sesiones)} sesiones activas recuperadas", flush=True)
     # Renovador desactivado: WHATSAPP_TOKEN debe venir desde Render Environment.
     # asyncio.create_task(renovar_token())
     asyncio.create_task(limpiar_sesiones())
@@ -350,6 +353,50 @@ servicios_tomados: set[str] = set()
 calificacion_pendiente: set[str] = set()  # números con calificación ya programada
 historial_viajes: dict[str, list] = {}  # historial de viajes por número
 ultima_actividad: dict[str, float] = {}  # timestamp última actividad por número
+
+# ── Persistencia en disco (sobrevive reinicios y deploys de Render) ───────────
+# Render monta un disco persistente en /var/data. Si no existe (entorno local),
+# usa la carpeta del proyecto. Solo lo que está bajo el mount path sobrevive.
+DATA_DIR = "/var/data" if os.path.isdir("/var/data") else os.path.dirname(os.path.abspath(__file__))
+ESTADO_FILE = os.path.join(DATA_DIR, "sesiones.json")
+
+
+def guardar_estado():
+    """Guarda el estado conversacional en disco con escritura atómica.
+    Nunca lanza excepción: si algo falla, lo registra y sigue."""
+    try:
+        bundle = {
+            "sesiones": sesiones,
+            "viajes_recurrentes": viajes_recurrentes,
+            "viajes_programados": viajes_programados,
+            "ultima_actividad": ultima_actividad,
+        }
+        tmp = ESTADO_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(bundle, f, ensure_ascii=False)
+        os.replace(tmp, ESTADO_FILE)  # atómico: evita archivos corruptos
+    except Exception as e:
+        print(f"[PERSIST ERROR] guardar: {e}", flush=True)
+
+
+def cargar_estado():
+    """Carga el estado conversacional desde disco al arrancar."""
+    try:
+        if not os.path.exists(ESTADO_FILE):
+            print(f"[PERSIST] sin estado previo en {ESTADO_FILE}, arranque limpio", flush=True)
+            return
+        with open(ESTADO_FILE, "r", encoding="utf-8") as f:
+            bundle = json.load(f)
+        sesiones.update(bundle.get("sesiones", {}) or {})
+        viajes_recurrentes.update(bundle.get("viajes_recurrentes", {}) or {})
+        vp = bundle.get("viajes_programados", []) or []
+        if isinstance(vp, list):
+            viajes_programados.extend(vp)
+        ultima_actividad.update(bundle.get("ultima_actividad", {}) or {})
+        print(f"[PERSIST] estado cargado: {len(sesiones)} sesiones, "
+              f"{len(viajes_recurrentes)} recurrentes desde {ESTADO_FILE}", flush=True)
+    except Exception as e:
+        print(f"[PERSIST ERROR] cargar: {e}", flush=True)
 # Estado conductor: True=activo/disponible, False=pausado
 conductores_estado: dict[str, bool] = {k: False for k in ["51992995140","51901258690","51900817214","51936882776","51940197110"]}
 
@@ -5517,6 +5564,9 @@ async def recibir(request: Request):
                 await procesar_audio(numero, msg.get("audio", {}))
             else:
                 await enviar_mensaje(numero, "Solo entiendo texto, ubicaciones e imágenes 😊\n\nEscribe *menu* para comenzar.")
+
+            # Persistir el estado tras cada mensaje (sobrevive reinicios/deploys)
+            guardar_estado()
 
         return {"status": "ok"}
     except Exception as e:
