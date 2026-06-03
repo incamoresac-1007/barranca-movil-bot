@@ -185,6 +185,16 @@ S_EDU_HORAS          = "EDU_HORAS"         # cuántas horas
 S_EDU_CUANDO         = "EDU_CUANDO"        # cuándo (hoy/fecha + hora)
 S_EDU_CONFIRMAR      = "EDU_CONFIRMAR"     # resumen y confirmación
 
+# ── Únete / Registro de proveedores y abonados ───────────────────────────────
+S_UNETE_TIPO         = "UNETE_TIPO"        # qué tipo de proveedor es
+S_UNETE_CONDICIONES  = "UNETE_CONDICIONES" # acepta condiciones de lanzamiento
+S_UNETE_NOMBRE       = "UNETE_NOMBRE"      # nombre completo del responsable
+S_UNETE_NEGOCIO      = "UNETE_NEGOCIO"     # nombre del negocio (gastronómico)
+S_UNETE_DIRECCION    = "UNETE_DIRECCION"   # dirección (gastronómico)
+S_UNETE_PLACA        = "UNETE_PLACA"       # placa (taxista/colectivero)
+S_UNETE_DETALLE      = "UNETE_DETALLE"     # detalle (profesor/seguridad)
+S_UNETE_CONFIRMAR    = "UNETE_CONFIRMAR"   # confirmación final
+
 # ── Mapa estado → estado anterior ────────────────────────────────────────────
 ESTADO_ANTERIOR = {
     S_NOMBRE:               S_MENU,
@@ -619,6 +629,7 @@ _Red inteligente de servicios locales en Barranca_
 2️⃣ 🍽️ Gastronomía
 3️⃣ 🛡️ Seguridad & Saneamiento
 4️⃣ 📚 Educación
+5️⃣ 🤝 Únete / Trabaja con nosotros
 0️⃣ Salir
 
 O escribe tu consulta libremente 💬"""
@@ -2907,6 +2918,129 @@ def extraer_nombre_dni(texto: str):
 
     return normalizar_nombre_persona(nombre), dni
 
+
+# ── Únete / Registro de proveedores ──────────────────────────────────────────
+UNETE_TIPOS = {
+    "1": "Negocio gastronómico (restaurante/cevichería/chifa)",
+    "2": "Taxista",
+    "3": "Colectivero",
+    "4": "Profesor",
+    "5": "Seguridad y Defensa Civil",
+}
+
+MSG_UNETE_CONDICIONES = (
+    "📋 *Condiciones — Etapa de Lanzamiento*\n\n"
+    "✅ El registro y la permanencia son *GRATIS durante el lanzamiento*.\n"
+    "✅ Recibes *promoción y publicidad* de tu negocio en nuestras redes.\n"
+    "📌 Al terminar el lanzamiento se aplicará una *tarifa por el servicio*, "
+    "que te comunicaremos *con anticipación*. Tu permanencia es *voluntaria*: "
+    "si no deseas continuar, te das de baja sin compromiso.\n"
+    "📌 Tu registro será *revisado y validado* por nuestro equipo antes de activarte.\n\n"
+    "Responde *ACEPTO* para continuar, o *0* para volver."
+)
+
+PROVEEDORES_FILE = os.path.join(DATA_DIR, "proveedores.json")
+
+
+def guardar_proveedor(registro: dict):
+    """Agrega un registro de proveedor al archivo en disco (lista JSON)."""
+    try:
+        data = []
+        if os.path.exists(PROVEEDORES_FILE):
+            with open(PROVEEDORES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f) or []
+        data.append(registro)
+        tmp = PROVEEDORES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, PROVEEDORES_FILE)
+        print(f"[PROVEEDOR] registrado: {registro.get('tipo')} - {registro.get('nombre')} ({registro.get('telefono')})", flush=True)
+        return len(data)
+    except Exception as e:
+        print(f"[PROVEEDOR ERROR] guardar: {e}", flush=True)
+        return None
+
+
+async def iniciar_unete(numero: str, sesion: dict):
+    """Inicia el flujo de registro de proveedor/abonado."""
+    sesion["estado"] = S_UNETE_TIPO
+    sesion["datos"] = {"servicio": "UNETE"}
+    await enviar_mensaje(numero,
+        "🤝 *¡Únete a El Cuervo!*\n"
+        "Estamos en lanzamiento y queremos sumar a los mejores de Barranca.\n\n"
+        "¿Qué eres?\n"
+        "1️⃣ Restaurante / Cevichería / Chifa\n"
+        "2️⃣ Taxista\n"
+        "3️⃣ Colectivero\n"
+        "4️⃣ Profesor (reforzamiento escolar)\n"
+        "5️⃣ Seguridad y Defensa Civil\n"
+        "0️⃣ Volver al menú")
+
+
+async def _unete_mostrar_resumen(numero: str, sesion: dict):
+    """Muestra el resumen del registro de proveedor y pasa a confirmación."""
+    d = sesion["datos"]
+    sesion["estado"] = S_UNETE_CONFIRMAR
+    lineas = [f"👤 {d.get('nombre','')}", f"📋 {d.get('unete_tipo_label','')}"]
+    if d.get("unete_negocio"):
+        lineas.append(f"🏪 {d['unete_negocio']}")
+    if d.get("unete_direccion"):
+        lineas.append(f"📍 {d['unete_direccion']}")
+    if d.get("unete_placa"):
+        lineas.append(f"🚗 Placa: {d['unete_placa']}")
+    if d.get("unete_detalle"):
+        lineas.append(f"📝 {d['unete_detalle']}")
+    await enviar_mensaje(numero,
+        "📋 *Confirma tu registro:*\n\n" + "\n".join(lineas) + "\n\n"
+        "1️⃣ Confirmar y enviar\n"
+        "2️⃣ Cancelar")
+
+
+async def _unete_finalizar(numero: str, sesion: dict):
+    """Guarda el registro, avisa al admin y agradece al interesado."""
+    d = sesion["datos"]
+    registro = {
+        "tipo": d.get("unete_tipo_label", ""),
+        "nombre": d.get("nombre", ""),
+        "telefono": numero,
+        "negocio": d.get("unete_negocio", ""),
+        "direccion": d.get("unete_direccion", ""),
+        "placa": d.get("unete_placa", ""),
+        "detalle": d.get("unete_detalle", ""),
+        "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "estado": "PENDIENTE_VALIDACION",
+    }
+    guardar_proveedor(registro)
+
+    # Aviso al admin (si hay número configurado en Render)
+    admin = os.getenv("ADMIN_WHATSAPP", "").strip()
+    if admin:
+        extra = ""
+        if registro["negocio"]:
+            extra += f"🏪 {registro['negocio']}\n"
+        if registro["direccion"]:
+            extra += f"📍 {registro['direccion']}\n"
+        if registro["placa"]:
+            extra += f"🚗 Placa: {registro['placa']}\n"
+        if registro["detalle"]:
+            extra += f"📝 {registro['detalle']}\n"
+        await enviar_mensaje(admin,
+            f"🆕 *Nuevo registro — {registro['tipo']}*\n\n"
+            f"👤 {registro['nombre']}\n"
+            f"📱 +{numero}\n"
+            f"{extra}"
+            f"🕒 {registro['fecha']}\n\n"
+            "_Pendiente de validación._")
+
+    sesion["estado"] = S_MENU
+    sesion["datos"] = {}
+    await enviar_mensaje(numero,
+        "✅ *¡Registro recibido!*\n\n"
+        "Gracias por querer ser parte de *El Cuervo* 🦅\n"
+        "Nuestro equipo revisará tus datos y te contactará pronto para validarte y activarte en la red.\n\n"
+        "Escribe *menu* para volver al inicio.")
+
+
 async def procesar(numero: str, tipo: str, contenido: dict):
     if numero not in sesiones:
         sesiones[numero] = {"estado": S_MENU, "datos": {}}
@@ -3543,6 +3677,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enrutar_categoria(numero, sesion, "SEGURIDAD")
         elif texto == "4":
             await enrutar_categoria(numero, sesion, "EDUCACION")
+        elif texto == "5":
+            await iniciar_unete(numero, sesion)
         elif texto == "0":
             sesiones.pop(numero, None)
             historial_ia.pop(numero, None)
@@ -3551,6 +3687,14 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "Cuando necesites algo escribe *hola* o *menu*.\n\n"
                 "_El Cuervo — servicios locales siempre a tu disposición_ 🦅")
         else:
+            # ¿Quiere unirse como proveedor?
+            _t = (texto or "").lower()
+            if any(p in _t for p in ["unirme", "unir me", "trabajar con", "trabajar contigo",
+                                     "quiero trabajar", "registrar mi", "registrarme",
+                                     "ser parte", "afiliar", "afiliarme", "quiero ser conductor",
+                                     "quiero ser profesor", "inscribir mi negocio", "abonado"]):
+                await iniciar_unete(numero, sesion)
+                return
             # Enrutador inteligente: detecta la intención del texto libre
             categoria = await clasificar_intencion(texto)
             print(f"[INTENCION] {numero}: '{texto}' -> {categoria}", flush=True)
@@ -3585,6 +3729,99 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                     "¿Qué deseas hacer?\n\n"
                     "1️⃣ Hacer una solicitud ahora\n"
                     "2️⃣ Hablar con un operador 👤")
+
+    # ══ ÚNETE / Registro de proveedores ═══════════════════════════════════════
+    elif estado == S_UNETE_TIPO:
+        if texto == "0":
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            await enviar_mensaje(numero, MSG_BIENVENIDA)
+            return
+        if texto not in UNETE_TIPOS:
+            await enviar_mensaje(numero, "Elige una opción del *1* al *5*, o *0* para volver.")
+            return
+        datos["unete_tipo"] = texto
+        datos["unete_tipo_label"] = UNETE_TIPOS[texto]
+        sesion["estado"] = S_UNETE_CONDICIONES
+        await enviar_mensaje(numero, MSG_UNETE_CONDICIONES)
+
+    elif estado == S_UNETE_CONDICIONES:
+        if texto == "0":
+            await iniciar_unete(numero, sesion)
+            return
+        if texto.strip().lower() not in ("acepto", "si", "sí", "ok", "acepta", "de acuerdo"):
+            await enviar_mensaje(numero,
+                "Para continuar necesito que aceptes las condiciones.\n"
+                "Responde *ACEPTO*, o *0* para volver.")
+            return
+        sesion["estado"] = S_UNETE_NOMBRE
+        await enviar_mensaje(numero,
+            "🙋 Escribe tu *nombre completo*.\nEjemplo: Victor Calixto")
+
+    elif estado == S_UNETE_NOMBRE:
+        nombre = normalizar_nombre_persona(texto)
+        if len(nombre) < 3:
+            await enviar_mensaje(numero, "Por favor escribe tu nombre completo.")
+            return
+        datos["nombre"] = nombre
+        t = datos.get("unete_tipo")
+        if t == "1":  # gastronómico
+            sesion["estado"] = S_UNETE_NEGOCIO
+            await enviar_mensaje(numero, "🏪 ¿Cuál es el *nombre de tu negocio*?")
+        elif t in ("2", "3"):  # taxista / colectivero
+            sesion["estado"] = S_UNETE_PLACA
+            await enviar_mensaje(numero, "🚗 ¿Cuál es la *placa* de tu vehículo?\nEjemplo: ABC-123")
+        elif t == "4":  # profesor
+            sesion["estado"] = S_UNETE_DETALLE
+            await enviar_mensaje(numero,
+                "📚 ¿Qué *niveles y materias* enseñas?\n_(Ej: primaria, matemática y comunicación)_")
+        else:  # seguridad
+            sesion["estado"] = S_UNETE_DETALLE
+            await enviar_mensaje(numero,
+                "🛡️ ¿Cuál es tu *especialidad*?\n_(Ej: extintores, defensa civil, instalaciones)_")
+
+    elif estado == S_UNETE_NEGOCIO:
+        if len(texto.strip()) < 2:
+            await enviar_mensaje(numero, "Por favor escribe el nombre de tu negocio.")
+            return
+        datos["unete_negocio"] = texto.strip()
+        sesion["estado"] = S_UNETE_DIRECCION
+        await enviar_mensaje(numero,
+            "📍 ¿Cuál es la *dirección* de tu negocio?\n• Comparte tu ubicación 📌\n• O escríbela")
+
+    elif estado == S_UNETE_DIRECCION:
+        if tipo == "location" and isinstance(contenido, dict):
+            datos["unete_direccion"] = await direccion_desde_gps(contenido.get("latitude"), contenido.get("longitude"))
+        elif lat and lng:
+            datos["unete_direccion"] = await direccion_desde_gps(lat, lng)
+        elif (texto or "").strip():
+            datos["unete_direccion"] = await limpiar_direccion(texto)
+        else:
+            await enviar_mensaje(numero, "Por favor escribe la dirección o comparte tu ubicación 📌.")
+            return
+        await _unete_mostrar_resumen(numero, sesion)
+
+    elif estado == S_UNETE_PLACA:
+        if len(texto.strip()) < 4:
+            await enviar_mensaje(numero, "Por favor escribe la placa de tu vehículo.\nEjemplo: ABC-123")
+            return
+        datos["unete_placa"] = texto.strip().upper()
+        await _unete_mostrar_resumen(numero, sesion)
+
+    elif estado == S_UNETE_DETALLE:
+        if len(texto.strip()) < 3:
+            await enviar_mensaje(numero, "Cuéntame un poco más, por favor.")
+            return
+        datos["unete_detalle"] = texto.strip()
+        await _unete_mostrar_resumen(numero, sesion)
+
+    elif estado == S_UNETE_CONFIRMAR:
+        if texto == "1" or texto.strip().lower() in ("confirmo", "si", "sí", "ok"):
+            await _unete_finalizar(numero, sesion)
+        elif texto == "2" or texto.strip().lower() in ("no", "cancelar"):
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            await enviar_mensaje(numero, "❌ Registro cancelado.\n\n" + MSG_BIENVENIDA)
+        else:
+            await enviar_mensaje(numero, "Responde *1* para confirmar o *2* para cancelar.")
 
     # ══ TRANSPORTE (El Cuervo) ═══════════════════════════════════════════
     elif estado == S_TRANSPORTE_MENU:
