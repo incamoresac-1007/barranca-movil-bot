@@ -5837,6 +5837,28 @@ async def update_ticket_estado(ticket_id: str, body: dict):
             return {"ok": True, "ticket": t}
     raise HTTPException(status_code=404, detail="Ticket no encontrado")
 
+@app.get("/proveedores")
+async def get_proveedores(clave: str = ""):
+    """Lista los proveedores/abonados registrados. Requiere ?clave=ADMIN_KEY."""
+    if clave != ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Clave incorrecta")
+    try:
+        if not os.path.exists(PROVEEDORES_FILE):
+            return {"total": 0, "proveedores": []}
+        with open(PROVEEDORES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f) or []
+        # más recientes primero
+        data_ord = list(reversed(data))
+        return {
+            "total": len(data),
+            "pendientes": sum(1 for p in data if p.get("estado") == "PENDIENTE_VALIDACION"),
+            "por_tipo": {t: sum(1 for p in data if p.get("tipo") == t)
+                         for t in sorted({p.get("tipo", "") for p in data})},
+            "proveedores": data_ord,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error leyendo registros: {e}")
+
 @app.get("/admin/recordatorio")
 async def admin_disparar_recordatorio(clave: str = ""):
     """
