@@ -839,7 +839,7 @@ def _limpiar_param_template(s) -> str:
 async def enviar_template_solicitud(to: str, p1: str, p2: str, p3: str, p4: str):
     """
     Envía la plantilla aprobada de nueva solicitud de servicio.
-    Plantilla Meta: nueva_solicitud_servicio  (idioma es_PE)
+    Plantilla Meta: nueva_solicitud_servicio_v2  (idioma es_PE)
     Variables: {{1}}=tipo  {{2}}=cliente  {{3}}=detalle  {{4}}=numero cliente
     Se usa cuando la ventana de 24h del conductor está cerrada, para garantizar entrega.
     """
@@ -853,7 +853,7 @@ async def enviar_template_solicitud(to: str, p1: str, p2: str, p3: str, p4: str)
         "to": to,
         "type": "template",
         "template": {
-            "name": "nueva_solicitud_servicio",
+            "name": "nueva_solicitud_servicio_v2",
             "language": {"code": "es_PE"},
             "components": [{
                 "type": "body",
@@ -872,14 +872,14 @@ async def enviar_template_solicitud(to: str, p1: str, p2: str, p3: str, p4: str)
             r = await client.post(url, headers=headers, json=payload)
 
         if r.status_code >= 400:
-            print(f"[TEMPLATE ERROR] nueva_solicitud_servicio to={to} status={r.status_code} {r.text}", flush=True)
+            print(f"[TEMPLATE ERROR] nueva_solicitud_servicio_v2 to={to} status={r.status_code} {r.text}", flush=True)
             return False
 
-        print(f"[TEMPLATE] nueva_solicitud_servicio enviado to={to} status={r.status_code}", flush=True)
+        print(f"[TEMPLATE] nueva_solicitud_servicio_v2 enviado to={to} status={r.status_code}", flush=True)
         return True
 
     except Exception as e:
-        print(f"[TEMPLATE EXCEPTION] nueva_solicitud_servicio to={to} error={e}", flush=True)
+        print(f"[TEMPLATE EXCEPTION] nueva_solicitud_servicio_v2 to={to} error={e}", flush=True)
         return False
 
 
@@ -5601,7 +5601,7 @@ async def admin_test_solicitud(clave: str = "", to: str = ""):
     """
     Prueba la plantilla de despacho nueva_solicitud_servicio.
     Uso: /admin/test-solicitud?clave=TU_CLAVE&to=51992995140
-    Revisa logs: [TEMPLATE] nueva_solicitud_servicio enviado = aprobada.
+    Revisa logs: [TEMPLATE] nueva_solicitud_servicio_v2 enviado = aprobada.
     [TEMPLATE ERROR] status=400 = aún no aprobada / nombre o idioma no coincide.
     """
     if clave != ADMIN_KEY:
