@@ -2262,7 +2262,7 @@ async def notificar_profesores(sesion: dict, numero_apoderado: str):
         + f"💰 Tarifa: S/{tarifa}/hora\n\n"
         + ("⚠️ *Clase presencial:* el apoderado estará presente durante toda la clase.\n\n"
            if modalidad == 'presencial' and d.get('edu_para_menor') else "")
-        + f"Responde: *ACEPTO {numero_apoderado}*"
+        + "Para tomar la clase responde: *ACEPTO* ✅"
     )
 
     cliente_str = _limpiar_param_template(f"{d.get('nombre','Apoderado')} | +{numero_apoderado}")
@@ -2290,6 +2290,65 @@ async def notificar_profesores(sesion: dict, numero_apoderado: str):
         f"Estamos contactando a nuestros profesores de *{NIVEL_LABEL.get(nivel, nivel)}*.\n"
         "Apenas uno acepte, te aviso con sus datos. 📚\n\n"
         "Escribe *menu* para volver al inicio.")
+
+
+async def _asignar_clase_a_profe(numero_profe: str, num_ap_full: str):
+    """Asigna una clase pendiente a un profesor y notifica a ambos + cierra a los demás."""
+    clases_tomadas.add(num_ap_full)
+    clase = clases_pendientes.pop(num_ap_full)
+    profe = PROFESORES[numero_profe]
+    d = clase["datos"]
+    modalidad = d.get("edu_modalidad", "virtual")
+    nivel_lbl = NIVEL_LABEL.get(d.get("edu_nivel"), d.get("edu_nivel", ""))
+
+    # Avisar a los demás profes que ya se tomó
+    for tel in clase.get("profesores_notificados", []):
+        if tel != numero_profe:
+            await enviar_mensaje(tel,
+                f"❌ *Clase tomada*\nLa clase de {d.get('edu_alumno','el alumno')} "
+                f"ya fue tomada por otro profesor.")
+
+    # Confirmar al profesor con los datos del apoderado
+    await enviar_mensaje(numero_profe,
+        f"✅ *¡Clase asignada para ti!*\n\n"
+        + (f"👤 Apoderado: {d.get('nombre','N/A')} (DNI {d.get('edu_dni','')}) | 📱 +{num_ap_full}\n"
+           f"🎓 Alumno: {d.get('edu_alumno','')}\n"
+           if d.get('edu_para_menor') else
+           f"👤 Estudiante: {d.get('nombre','N/A')} (DNI {d.get('edu_dni','')}, mayor de edad) | 📱 +{num_ap_full}\n")
+        + f"📚 Nivel: {nivel_lbl}\n"
+        f"📖 Tema: {d.get('edu_materia','')}\n"
+        f"💻 Modalidad: {'Presencial' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
+        + (f"📍 Dirección: {d.get('edu_direccion','')}\n" if modalidad == 'presencial' else "")
+        + f"💰 Tarifa: S/{tarifa_hora_edu(d.get('edu_nivel'))}/hora\n\n"
+        + ("⚠️ El apoderado estará presente durante toda la clase.\n"
+           "💡 Para trasladarte puedes pedir un taxi por este mismo bot. 🚖\n\n"
+           if modalidad == 'presencial' and d.get('edu_para_menor') else
+           ("💡 Para trasladarte puedes pedir un taxi por este mismo bot. 🚖\n\n"
+            if modalidad == 'presencial' else
+            "Coordina el enlace de *Zoom* directamente con el estudiante.\n\n"))
+        + "Contacta para acordar *horario y duración*.")
+
+    # Notificar al apoderado con los datos del profesor
+    await enviar_mensaje(num_ap_full,
+        f"📚 *¡Profesor asignado!*\n\n"
+        f"👨‍🏫 {profe.get('nombre','Profesor verificado')}\n"
+        f"📱 Contacto: +{numero_profe}\n"
+        f"📖 {d.get('edu_materia','')} — {nivel_lbl}\n"
+        f"💻 {'Presencial (domicilio)' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
+        f"💰 Tarifa: S/{tarifa_hora_edu(d.get('edu_nivel'))}/hora\n\n"
+        + ("El profesor te contactará para coordinar *horario y duración*. "
+           "Recuerda *estar presente* durante la clase.\n\n"
+           if modalidad == 'presencial' and d.get('edu_para_menor') else
+           "El profesor te contactará para coordinar *horario y duración*.\n\n")
+        + "Escribe *menu* para otra solicitud.")
+
+    print(f"[EDU ASIGNADA] apoderado=+{num_ap_full} profe={profe.get('nombre','')} "
+          f"nivel={d.get('edu_nivel')} tarifa=S/{tarifa_hora_edu(d.get('edu_nivel'))}/h", flush=True)
+
+    async def _limpiar_clase_tomada():
+        await asyncio.sleep(300)
+        clases_tomadas.discard(num_ap_full)
+    asyncio.create_task(_limpiar_clase_tomada())
 
 # ── Historial de viajes ──────────────────────────────────────────────────────
 def guardar_viaje(numero: str, datos: dict, tipo: str):
@@ -2433,7 +2492,7 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
                f"📍 {d.get('recojo_texto')}\n"
                f"🏁 {d.get('destino_texto')}\n"
                f"💰 {tarifa_txt} | 💳 {d.get('pago')}\n\n"
-               f"Responde: *ACEPTO {numero_cliente}*")
+               "Para tomar el servicio responde: *ACEPTO* ✅")
     elif tipo == "ENCOMIENDA":
         tarifa_txt = f"S/{d.get('enc_tarifa_final')}" if d.get("enc_tarifa_final") else "A coordinar"
         foto_txt = "✅ El cliente envió foto" if d.get("enc_foto") else "Sin foto"
@@ -2447,7 +2506,7 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
                f"🏁 Destino: {d.get('enc_destino')}\n"
                f"👤 Destinatario: {d.get('enc_destinatario')}\n"
                f"💰 {tarifa_txt} | 💳 {d.get('pago')}{contra_entrega}\n\n"
-               f"Responde: *ACEPTO {numero_cliente}*")
+               "Para tomar el servicio responde: *ACEPTO* ✅")
     elif tipo == "COLECTIVO":
         msg = (f"🚌 *NUEVO COLECTIVO*\n\n"
                f"👤 {d.get('nombre')} | 📱 +{numero_cliente}\n"
@@ -2457,7 +2516,7 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
                f"📍 Recojo solicitado: {d.get('colectivo_recojo')}\n"
                f"💰 S/{d.get('colectivo_total')} | 💳 {d.get('colectivo_pago')}\n\n"
                f"💡 Puedes completar el cupo en el paradero\n\n"
-               f"Responde: *ACEPTO {numero_cliente}*")
+               "Para tomar el servicio responde: *ACEPTO* ✅")
     elif tipo == "TURISMO":
         precio_ref = d.get("ruta_precio_ref", "a coordinar")
         precio_txt = f"S/{precio_ref} referencial" if precio_ref else "A coordinar"
@@ -2472,7 +2531,7 @@ async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "
                + f"📅 {d.get('fecha')} | 📍 {d.get('recojo_texto','')}\n"
                f"💰 {precio_txt} | 💳 {d.get('pago')}{nota_caral}\n\n"
                f"💬 *Contacta al cliente para confirmar precio final*\n\n"
-               f"Responde: *ACEPTO {numero_cliente}*")
+               "Para tomar el servicio responde: *ACEPTO* ✅")
     else:
         return
 
@@ -2884,82 +2943,39 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 "Ejemplo: COTIZO 987654321 150 recarga 3 extintores 6kg")
         return
 
-    # ── Profesor responde ACEPTO (Educación) ─────────────────────────────────
-    if texto.upper().startswith("ACEPTO") and numero in PROFESORES:
-        partes = texto.strip().split()
-        if len(partes) >= 2:
-            num_ap = partes[1].replace("+", "")
-            num_ap_full = num_ap if num_ap.startswith("51") else f"51{num_ap}"
-
-            if num_ap_full not in clases_pendientes:
-                await enviar_mensaje(numero, "❌ Esta clase ya no está disponible.")
-                return
-            if num_ap_full in clases_tomadas:
-                await enviar_mensaje(numero, "❌ Esta clase ya fue tomada por otro profesor.")
-                return
-            if numero not in clases_pendientes[num_ap_full].get("profesores_notificados", []):
-                await enviar_mensaje(numero, "❌ No estás en la lista de profesores para esta clase.")
-                return
-
-            clases_tomadas.add(num_ap_full)
-            clase = clases_pendientes.pop(num_ap_full)
-            profe = PROFESORES[numero]
-            d = clase["datos"]
-            modalidad = d.get("edu_modalidad", "virtual")
-            nivel_lbl = NIVEL_LABEL.get(d.get("edu_nivel"), d.get("edu_nivel", ""))
-
-            # Avisar a los demás profes que ya se tomó
-            for tel in clase.get("profesores_notificados", []):
-                if tel != numero:
-                    await enviar_mensaje(tel,
-                        f"❌ *Clase tomada*\nLa clase de {d.get('edu_alumno','el alumno')} "
-                        f"ya fue tomada por otro profesor.")
-
-            # Confirmar al profesor con los datos del apoderado
-            await enviar_mensaje(numero,
-                f"✅ *¡Clase asignada para ti!*\n\n"
-                + (f"👤 Apoderado: {d.get('nombre','N/A')} (DNI {d.get('edu_dni','')}) | 📱 +{num_ap_full}\n"
-                   f"🎓 Alumno: {d.get('edu_alumno','')}\n"
-                   if d.get('edu_para_menor') else
-                   f"👤 Estudiante: {d.get('nombre','N/A')} (DNI {d.get('edu_dni','')}, mayor de edad) | 📱 +{num_ap_full}\n")
-                + f"📚 Nivel: {nivel_lbl}\n"
-                f"📖 Tema: {d.get('edu_materia','')}\n"
-                f"💻 Modalidad: {'Presencial' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
-                + (f"📍 Dirección: {d.get('edu_direccion','')}\n" if modalidad == 'presencial' else "")
-                + f"💰 Tarifa: S/{tarifa_hora_edu(d.get('edu_nivel'))}/hora\n\n"
-                + ("⚠️ El apoderado estará presente durante toda la clase.\n"
-                   "💡 Para trasladarte puedes pedir un taxi por este mismo bot. 🚖\n\n"
-                   if modalidad == 'presencial' and d.get('edu_para_menor') else
-                   ("💡 Para trasladarte puedes pedir un taxi por este mismo bot. 🚖\n\n"
-                    if modalidad == 'presencial' else
-                    "Coordina el enlace de *Zoom* directamente con el estudiante.\n\n"))
-                + "Contacta para acordar *horario y duración*.")
-
-            # Notificar al apoderado con los datos del profesor
-            await enviar_mensaje(num_ap_full,
-                f"📚 *¡Profesor asignado!*\n\n"
-                f"👨‍🏫 {profe.get('nombre','Profesor verificado')}\n"
-                f"📱 Contacto: +{numero}\n"
-                f"📖 {d.get('edu_materia','')} — {nivel_lbl}\n"
-                f"💻 {'Presencial (domicilio)' if modalidad=='presencial' else 'Virtual (Zoom)'}\n"
-                f"💰 Tarifa: S/{tarifa_hora_edu(d.get('edu_nivel'))}/hora\n\n"
-                + ("El profesor te contactará para coordinar *horario y duración*. "
-                   "Recuerda *estar presente* durante la clase.\n\n"
-                   if modalidad == 'presencial' and d.get('edu_para_menor') else
-                   "El profesor te contactará para coordinar *horario y duración*.\n\n")
-                + "Escribe *menu* para otra solicitud.")
-
-            print(f"[EDU ASIGNADA] apoderado=+{num_ap_full} profe={profe.get('nombre','')} "
-                  f"nivel={d.get('edu_nivel')} tarifa=S/{tarifa_hora_edu(d.get('edu_nivel'))}/h", flush=True)
-
-            async def _limpiar_clase_tomada():
-                await asyncio.sleep(300)
-                clases_tomadas.discard(num_ap_full)
-            asyncio.create_task(_limpiar_clase_tomada())
-        else:
-            await enviar_mensaje(numero,
-                "Para aceptar una clase responde: *ACEPTO [número del apoderado]*")
-        return
+    # ── Profesor responde ACEPTO (Educación) — solo "acepto", sin número ──────
+    if numero in PROFESORES:
+        _clases_profe = [na for na in clases_pendientes
+                         if na not in clases_tomadas
+                         and numero in clases_pendientes[na].get("profesores_notificados", [])]
+        _txt_low = texto.strip().lower()
+        _es_acepto = texto.upper().startswith("ACEPTO") or (
+            _txt_low in {"acepto", "listo", "si", "sí", "ok", "dale", "voy", "ya", "tomo", "vamos"}
+            and _clases_profe)
+        if _es_acepto:
+            partes = texto.strip().split()
+            # ¿Vino número explícito? (ACEPTO 51999...)
+            num_arg = partes[1].replace("+", "") if (partes[0].upper() == "ACEPTO" and len(partes) >= 2) else ""
+            if num_arg:
+                num_ap_full = num_arg if num_arg.startswith("51") else f"51{num_arg}"
+                if num_ap_full not in clases_pendientes or num_ap_full in clases_tomadas:
+                    await enviar_mensaje(numero, "❌ Esa clase ya no está disponible o fue tomada.")
+                    return
+                if numero not in clases_pendientes[num_ap_full].get("profesores_notificados", []):
+                    await enviar_mensaje(numero, "❌ No estás en la lista de profesores para esta clase.")
+                    return
+                await _asignar_clase_a_profe(numero, num_ap_full)
+            elif len(_clases_profe) == 1:
+                await _asignar_clase_a_profe(numero, _clases_profe[0])
+            elif len(_clases_profe) > 1:
+                lista = "\n".join(
+                    f"• Responde *ACEPTO {na}* — {clases_pendientes[na]['datos'].get('edu_alumno','alumno')}"
+                    for na in _clases_profe)
+                await enviar_mensaje(numero,
+                    f"Tienes {len(_clases_profe)} clases pendientes. ¿Cuál tomas?\n\n{lista}")
+            else:
+                await enviar_mensaje(numero, "No tienes clases pendientes por aceptar.")
+            return
 
     # ── Conductor responde ACEPTO (con sinónimos) ────────────────────────────
     SINONIMOS_ACEPTO = {"listo","si","sí","ok","dale","voy","ya","tomo","vamos"}
@@ -3378,7 +3394,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 f"Estado: {estado_txt}\n"
                 f"{viaje_txt}\n\n"
                 f"Comandos disponibles:\n"
-                f"• *ACEPTO [número]* — aceptar servicio\n"
+                f"• *ACEPTO* — aceptar el servicio que te llegó\n"
                 f"• *LLEGUE* — avisar que llegué al recojo\n"
                 f"• *FIN* — marcar viaje terminado\n"
                 f"• *PAUSAR* / *ACTIVAR* — cambiar disponibilidad")
