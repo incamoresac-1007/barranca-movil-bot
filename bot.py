@@ -195,6 +195,12 @@ S_UNETE_PLACA        = "UNETE_PLACA"       # placa (taxista/colectivero)
 S_UNETE_DETALLE      = "UNETE_DETALLE"     # detalle (profesor/seguridad)
 S_UNETE_CONFIRMAR    = "UNETE_CONFIRMAR"   # confirmación final
 
+# ── Servicios Técnicos (módulo madre: soporte técnico, gasfitería, etc.) ──────
+S_TEC_OFICIO         = "TEC_OFICIO"        # elige el oficio
+S_TEC_PROBLEMA       = "TEC_PROBLEMA"      # describe el problema/necesidad
+S_TEC_DIRECCION      = "TEC_DIRECCION"     # dónde es el servicio
+S_TEC_CUANDO         = "TEC_CUANDO"        # cuándo lo necesita
+S_TEC_CONFIRMAR      = "TEC_CONFIRMAR"     # resumen y confirmación
 # ── Mapa estado → estado anterior ────────────────────────────────────────────
 ESTADO_ANTERIOR = {
     S_NOMBRE:               S_MENU,
@@ -629,7 +635,8 @@ _Red inteligente de servicios locales en Barranca_
 2️⃣ 🍽️ Gastronomía
 3️⃣ 🛡️ Seguridad & Saneamiento
 4️⃣ 📚 Educación
-5️⃣ 🤝 Únete / Trabaja con nosotros
+5️⃣ 🔧 Servicios Técnicos
+6️⃣ 🤝 Únete / Trabaja con nosotros
 0️⃣ Salir
 
 O escribe tu consulta libremente 💬"""
@@ -2046,8 +2053,9 @@ async def clasificar_intencion(texto: str) -> str:
         "GASTRONOMIA = pedir comida, restaurantes, delivery de comida, antojos.\n"
         "SEGURIDAD = extintores, fumigación o control de plagas, señalización, defensa civil, saneamiento.\n"
         "EDUCACION = clases particulares, reforzamiento escolar, profesor de matemática u otra materia, tutorías, apoyo con tareas o exámenes.\n"
+        "SERVICIOS_TECNICOS = soporte técnico de PC/laptop/celular/impresora/red/cámaras, gasfitería, cerrajería, electricista, reparación de electrodomésticos, arreglos del hogar o negocio.\n"
         "CONSULTA = saludos, preguntas generales, dudas, o cualquier cosa que no encaje claramente en las anteriores.\n"
-        "Responde únicamente una de estas palabras: TRANSPORTE, GASTRONOMIA, SEGURIDAD, EDUCACION, CONSULTA."
+        "Responde únicamente una de estas palabras: TRANSPORTE, GASTRONOMIA, SEGURIDAD, EDUCACION, SERVICIOS_TECNICOS, CONSULTA."
     )
 
     def _groq():
@@ -2061,12 +2069,35 @@ async def clasificar_intencion(texto: str) -> str:
     try:
         completion = await asyncio.wait_for(asyncio.to_thread(_groq), timeout=3.0)
         raw = (completion.choices[0].message.content or "").strip().upper()
-        for cat in ("TRANSPORTE", "GASTRONOMIA", "SEGURIDAD", "EDUCACION", "CONSULTA"):
+        for cat in ("TRANSPORTE", "GASTRONOMIA", "SEGURIDAD", "EDUCACION", "SERVICIOS_TECNICOS", "CONSULTA"):
             if cat in raw:
                 return cat
     except (asyncio.TimeoutError, Exception):
         pass
     return "CONSULTA"
+
+
+# ── Servicios Técnicos: catálogo de oficios ──────────────────────────────────
+TEC_OFICIOS = {
+    "1": "Soporte técnico (PC, laptops, celulares, redes)",
+    "2": "Gasfitería",
+    "3": "Cerrajería",
+    "4": "Electricista",
+    "5": "Técnico de electrodomésticos",
+}
+
+MSG_TEC_MENU = (
+    "🔧 *Servicios Técnicos — El Cuervo*\n"
+    "Técnicos y especialistas para tu hogar o negocio.\n\n"
+    "¿Qué necesitas?\n"
+    "1️⃣ 💻 Soporte técnico (PC, laptops, celulares, redes)\n"
+    "2️⃣ 🔧 Gasfitería\n"
+    "3️⃣ 🔑 Cerrajería\n"
+    "4️⃣ ⚡ Electricista\n"
+    "5️⃣ 🧊 Técnico de electrodomésticos\n"
+    "0️⃣ Volver al menú\n\n"
+    "_El técnico coordina el precio contigo según el trabajo._"
+)
 
 
 async def enrutar_categoria(numero: str, sesion: dict, categoria: str, prefijo: str = "") -> bool:
@@ -2092,6 +2123,11 @@ async def enrutar_categoria(numero: str, sesion: dict, categoria: str, prefijo: 
         sesion["estado"] = S_EDU_PARA_QUIEN
         sesion["datos"] = {"servicio": "EDUCACION"}
         await enviar_mensaje(numero, prefijo + MSG_EDU_INTRO)
+        return True
+    if categoria == "SERVICIOS_TECNICOS":
+        sesion["estado"] = S_TEC_OFICIO
+        sesion["datos"] = {"servicio": "SERVICIO_TECNICO"}
+        await enviar_mensaje(numero, prefijo + MSG_TEC_MENU)
         return True
     return False
 
@@ -2927,6 +2963,7 @@ UNETE_TIPOS = {
     "3": "Colectivero",
     "4": "Profesor",
     "5": "Seguridad y Defensa Civil",
+    "6": "Técnico / Especialista",
 }
 
 MSG_UNETE_CONDICIONES = (
@@ -2946,6 +2983,7 @@ SERVICIOS_FILE = os.path.join(DATA_DIR, "servicios.json")
 CATEGORIA_SERVICIO = {
     "TAXI": "Transporte", "COLECTIVO": "Transporte", "ENCOMIENDA": "Transporte",
     "TURISMO": "Turismo", "EDUCACION": "Educación", "SEGURIDAD": "Seguridad",
+    "SERVICIO_TECNICO": "Servicios Técnicos",
 }
 
 
@@ -2977,6 +3015,7 @@ def registrar_servicio(tipo_servicio: str, datos: dict, numero: str) -> str:
             "categoria": CATEGORIA_SERVICIO.get(tipo_servicio, "Otro"),
             "cliente": datos.get("nombre", ""), "telefono": numero,
             "monto": _monto_de(datos), "estado": "solicitado", "proveedor": "",
+            "oficio": datos.get("tec_oficio", ""),
             "fecha": ahora.strftime("%Y-%m-%d %H:%M:%S"), "dia": ahora.strftime("%Y-%m-%d"),
         }
         data.append(registro)
@@ -3046,6 +3085,7 @@ async def iniciar_unete(numero: str, sesion: dict):
         "3️⃣ Colectivero\n"
         "4️⃣ Profesor (reforzamiento escolar)\n"
         "5️⃣ Seguridad y Defensa Civil\n"
+        "6️⃣ Técnico / Especialista (soporte técnico, gasfitería, etc.)\n"
         "0️⃣ Volver al menú")
 
 
@@ -3111,6 +3151,32 @@ async def _unete_finalizar(numero: str, sesion: dict):
         "Gracias por querer ser parte de *El Cuervo* 🦅\n"
         "Nuestro equipo revisará tus datos y te contactará pronto para validarte y activarte en la red.\n\n"
         "Escribe *menu* para volver al inicio.")
+
+
+async def _tec_finalizar(numero: str, sesion: dict):
+    """Registra la solicitud técnica, avisa al admin y cierra con el cliente."""
+    d = sesion["datos"]
+    registrar_servicio("SERVICIO_TECNICO", d, numero)
+
+    admin = os.getenv("ADMIN_WHATSAPP", "").strip()
+    if admin:
+        await enviar_mensaje(admin,
+            f"🔧 *Nueva solicitud — Servicios Técnicos*\n\n"
+            f"🛠️ Oficio: {d.get('tec_oficio','')}\n"
+            f"👤 {d.get('nombre','(sin nombre)')}\n"
+            f"📱 +{numero}\n"
+            f"📝 {d.get('tec_problema','')}\n"
+            f"📍 {d.get('tec_direccion','(no indicada)')}\n"
+            f"🕒 {d.get('tec_cuando','(a coordinar)')}\n\n"
+            "_Asignar un técnico y coordinar._")
+
+    sesion["estado"] = S_MENU
+    sesion["datos"] = {}
+    await enviar_mensaje(numero,
+        "✅ *¡Solicitud recibida!*\n\n"
+        "Estamos buscando un técnico disponible para tu necesidad. "
+        "En breve te contactaremos para coordinar la visita y el precio.\n\n"
+        "Escribe *menu* para volver al inicio. 🦅")
 
 
 async def procesar(numero: str, tipo: str, contenido: dict):
@@ -3752,6 +3818,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         elif texto == "4":
             await enrutar_categoria(numero, sesion, "EDUCACION")
         elif texto == "5":
+            await enrutar_categoria(numero, sesion, "SERVICIOS_TECNICOS")
+        elif texto == "6":
             await iniciar_unete(numero, sesion)
         elif texto == "0":
             sesiones.pop(numero, None)
@@ -3793,6 +3861,9 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 else:
                     await enrutar_categoria(numero, sesion, "EDUCACION",
                         prefijo="📚 ¡Perfecto! Te llevo a *Educación*.\n\n")
+            elif categoria == "SERVICIOS_TECNICOS":
+                await enrutar_categoria(numero, sesion, "SERVICIOS_TECNICOS",
+                    prefijo="🔧 Entendido. Te llevo a *Servicios Técnicos*.\n\n")
             else:
                 resp = await respuesta_ia(numero, texto)
                 datos["ultima_consulta"] = texto
@@ -3848,6 +3919,11 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             sesion["estado"] = S_UNETE_DETALLE
             await enviar_mensaje(numero,
                 "📚 ¿Qué *niveles y materias* enseñas?\n_(Ej: primaria, matemática y comunicación)_")
+        elif t == "6":  # técnico / especialista
+            sesion["estado"] = S_UNETE_DETALLE
+            await enviar_mensaje(numero,
+                "🛠️ ¿Cuál es tu *oficio o especialidad*?\n"
+                "_(Ej: soporte técnico de PC y celulares, gasfitería, cerrajería, electricista)_")
         else:  # seguridad
             sesion["estado"] = S_UNETE_DETALLE
             await enviar_mensaje(numero,
@@ -3894,6 +3970,70 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         elif texto == "2" or texto.strip().lower() in ("no", "cancelar"):
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
             await enviar_mensaje(numero, "❌ Registro cancelado.\n\n" + MSG_BIENVENIDA)
+        else:
+            await enviar_mensaje(numero, "Responde *1* para confirmar o *2* para cancelar.")
+
+    # ══ SERVICIOS TÉCNICOS ════════════════════════════════════════════════════
+    elif estado == S_TEC_OFICIO:
+        if texto == "0":
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            await enviar_mensaje(numero, MSG_BIENVENIDA)
+            return
+        if texto not in TEC_OFICIOS:
+            await enviar_mensaje(numero, "Elige una opción del *1* al *5*, o *0* para volver.")
+            return
+        datos["tec_oficio"] = TEC_OFICIOS[texto]
+        sesion["estado"] = S_TEC_PROBLEMA
+        await enviar_mensaje(numero,
+            f"🛠️ *{datos['tec_oficio']}*\n\n"
+            "Cuéntame, ¿cuál es el problema o qué necesitas? "
+            "Descríbelo con el mayor detalle posible.")
+
+    elif estado == S_TEC_PROBLEMA:
+        if len((texto or "").strip()) < 4:
+            await enviar_mensaje(numero, "Por favor descríbeme un poco más qué necesitas.")
+            return
+        datos["tec_problema"] = texto.strip()
+        sesion["estado"] = S_TEC_DIRECCION
+        await enviar_mensaje(numero,
+            "📍 ¿Dónde sería el servicio?\n• Comparte tu ubicación 📌\n• O escribe la dirección")
+
+    elif estado == S_TEC_DIRECCION:
+        if tipo == "location" and isinstance(contenido, dict):
+            datos["tec_direccion"] = await direccion_desde_gps(contenido.get("latitude"), contenido.get("longitude"))
+        elif lat and lng:
+            datos["tec_direccion"] = await direccion_desde_gps(lat, lng)
+        elif (texto or "").strip():
+            datos["tec_direccion"] = await limpiar_direccion(texto)
+        else:
+            await enviar_mensaje(numero, "Por favor escribe la dirección o comparte tu ubicación 📌.")
+            return
+        sesion["estado"] = S_TEC_CUANDO
+        await enviar_mensaje(numero,
+            "🕒 ¿Para cuándo lo necesitas?\n_(Ej: hoy en la tarde, mañana 9am, lo antes posible)_")
+
+    elif estado == S_TEC_CUANDO:
+        if len((texto or "").strip()) < 2:
+            await enviar_mensaje(numero, "Cuéntame para cuándo lo necesitas.")
+            return
+        datos["tec_cuando"] = texto.strip()
+        sesion["estado"] = S_TEC_CONFIRMAR
+        await enviar_mensaje(numero,
+            "📋 *Confirma tu solicitud:*\n\n"
+            f"🛠️ {datos.get('tec_oficio','')}\n"
+            f"📝 {datos.get('tec_problema','')}\n"
+            f"📍 {datos.get('tec_direccion','')}\n"
+            f"🕒 {datos.get('tec_cuando','')}\n\n"
+            "_El técnico coordinará el precio contigo según el trabajo._\n\n"
+            "1️⃣ Confirmar y enviar\n"
+            "2️⃣ Cancelar")
+
+    elif estado == S_TEC_CONFIRMAR:
+        if texto == "1" or texto.strip().lower() in ("confirmo", "si", "sí", "ok"):
+            await _tec_finalizar(numero, sesion)
+        elif texto == "2" or texto.strip().lower() in ("no", "cancelar"):
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            await enviar_mensaje(numero, "❌ Solicitud cancelada.\n\n" + MSG_BIENVENIDA)
         else:
             await enviar_mensaje(numero, "Responde *1* para confirmar o *2* para cancelar.")
 
