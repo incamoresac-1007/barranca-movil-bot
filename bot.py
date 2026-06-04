@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 import httpx
 from fastapi import FastAPI, Request, HTTPException
@@ -2355,6 +2355,7 @@ async def _asignar_clase_a_profe(numero_profe: str, num_ap_full: str):
     clases_tomadas.add(num_ap_full)
     clase = clases_pendientes.pop(num_ap_full)
     profe = PROFESORES[numero_profe]
+    marcar_servicio_atendido(num_ap_full, profe.get("nombre", ""))
     d = clase["datos"]
     modalidad = d.get("edu_modalidad", "virtual")
     nivel_lbl = NIVEL_LABEL.get(d.get("edu_nivel"), d.get("edu_nivel", ""))
@@ -2940,6 +2941,77 @@ MSG_UNETE_CONDICIONES = (
 )
 
 PROVEEDORES_FILE = os.path.join(DATA_DIR, "proveedores.json")
+SERVICIOS_FILE = os.path.join(DATA_DIR, "servicios.json")
+
+CATEGORIA_SERVICIO = {
+    "TAXI": "Transporte", "COLECTIVO": "Transporte", "ENCOMIENDA": "Transporte",
+    "TURISMO": "Turismo", "EDUCACION": "Educación", "SEGURIDAD": "Seguridad",
+}
+
+
+def _monto_de(datos: dict) -> float:
+    """Extrae un monto numérico de los datos del servicio (0 si es 'a coordinar')."""
+    for k in ("tarifa", "precio", "monto", "tarifa_total"):
+        v = datos.get(k)
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            try:
+                return float(v.replace("S/", "").replace(",", ".").strip())
+            except (ValueError, AttributeError):
+                continue
+    return 0.0
+
+
+def registrar_servicio(tipo_servicio: str, datos: dict, numero: str) -> str:
+    """Registra un servicio solicitado en disco para el dashboard. Devuelve su id."""
+    try:
+        data = []
+        if os.path.exists(SERVICIOS_FILE):
+            with open(SERVICIOS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f) or []
+        ahora = datetime.now()
+        sid = f"SV-{int(time.time()*1000) % 10000000}"
+        registro = {
+            "id": sid, "tipo": tipo_servicio,
+            "categoria": CATEGORIA_SERVICIO.get(tipo_servicio, "Otro"),
+            "cliente": datos.get("nombre", ""), "telefono": numero,
+            "monto": _monto_de(datos), "estado": "solicitado", "proveedor": "",
+            "fecha": ahora.strftime("%Y-%m-%d %H:%M:%S"), "dia": ahora.strftime("%Y-%m-%d"),
+        }
+        data.append(registro)
+        if len(data) > 5000:
+            data = data[-5000:]
+        tmp = SERVICIOS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, SERVICIOS_FILE)
+        print(f"[SERVICIO] {tipo_servicio} registrado {sid} cliente={numero} monto={registro['monto']}", flush=True)
+        return sid
+    except Exception as e:
+        print(f"[SERVICIO ERROR] registrar: {e}", flush=True)
+        return ""
+
+
+def marcar_servicio_atendido(numero_cliente: str, proveedor: str = ""):
+    """Marca el servicio 'solicitado' más reciente de un cliente como 'atendido'."""
+    try:
+        if not os.path.exists(SERVICIOS_FILE):
+            return
+        with open(SERVICIOS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f) or []
+        for r in reversed(data):
+            if r.get("telefono") == numero_cliente and r.get("estado") == "solicitado":
+                r["estado"] = "atendido"
+                if proveedor:
+                    r["proveedor"] = proveedor
+                break
+        tmp = SERVICIOS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, SERVICIOS_FILE)
+    except Exception as e:
+        print(f"[SERVICIO ERROR] atender: {e}", flush=True)
 
 
 def guardar_proveedor(registro: dict):
@@ -3189,6 +3261,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             servicio = servicios_pendientes.pop(numero_cliente_full)
             conductor = CONDUCTORES[numero]
             tipo_servicio = servicio.get("tipo", "TAXI")
+            marcar_servicio_atendido(numero_cliente_full, conductor.get("nombre", ""))
 
             asyncio.create_task(sheets_evento(
                 "upsert_servicio",
@@ -3283,6 +3356,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 servicio = servicios_pendientes.pop(numero_cliente_full)
                 conductor = CONDUCTORES[numero]
                 tipo_servicio = servicio.get("tipo", "TAXI")
+                marcar_servicio_atendido(numero_cliente_full, conductor.get("nombre", ""))
 
                 asyncio.create_task(sheets_evento(
                     "upsert_servicio",
@@ -4112,6 +4186,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     elif estado == S_EDU_CONFIRMAR:
         if texto == "1":
+            registrar_servicio("EDUCACION", datos, numero)
             await notificar_profesores(sesion, numero)
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
         elif texto == "2":
@@ -4515,6 +4590,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     elif estado == S_CONFIRMAR:
         if texto == "1":
+            registrar_servicio("TAXI", datos, numero)
             await notificar_conductores(sesion, numero, "TAXI")
             guardar_viaje(numero, datos, "taxi")
             datos_servicio = {
@@ -4722,6 +4798,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     elif estado == S_COLECTIVO_CONFIRMAR:
         if texto == "1":
+            registrar_servicio("COLECTIVO", datos, numero)
             await notificar_conductores(sesion, numero, "COLECTIVO")
             guardar_viaje(numero, {
                 "destino_texto": datos.get("colectivo_ruta"),
@@ -5328,6 +5405,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     elif estado == S_ENCOMIENDA_CONFIRMAR:
         if texto == "1":
+            registrar_servicio("ENCOMIENDA", datos, numero)
             await notificar_conductores(sesion, numero, "ENCOMIENDA")
             guardar_viaje(numero, datos, "encomienda")
             datos_servicio = {"tipo": "encomienda", "destino": datos.get("enc_destino", "destino"), "conductor": "Pendiente"}
@@ -5734,6 +5812,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
     elif estado == S_TURISMO_CONFIRMAR:
         if texto == "1":
+            registrar_servicio("TURISMO", datos, numero)
             await notificar_conductores(sesion, numero, "TURISMO")
             guardar_viaje(numero, {
                 "destino_texto": datos.get("ruta_nombre"),
@@ -5864,118 +5943,189 @@ DASHBOARD_HTML = r'''<!DOCTYPE html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Panel El Cuervo</title>
+<title>Dashboard El Cuervo</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
-  * { box-sizing: border-box; margin:0; padding:0; }
-  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0a0b10; color:#e9e9ef; padding:18px; }
-  .top { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:18px; border-bottom:1px solid #23242e; padding-bottom:14px; }
-  .brand { display:flex; align-items:center; gap:12px; }
-  .brand .logo { width:44px; height:44px; border-radius:50%; background:#15161d; border:2px solid #e8b04b; display:flex; align-items:center; justify-content:center; font-size:22px; }
-  .brand h1 { font-size:20px; font-weight:700; letter-spacing:1px; }
-  .brand h1 span { color:#e8b04b; }
-  .brand p { font-size:12px; color:#8b8c98; }
-  .live { display:flex; align-items:center; gap:8px; font-size:12px; color:#9a9ba6; }
-  .dot { width:9px; height:9px; border-radius:50%; background:#27c08a; animation:pulse 1.8s infinite; }
-  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(39,192,138,.5)} 70%{box-shadow:0 0 0 9px rgba(39,192,138,0)} 100%{box-shadow:0 0 0 0 rgba(39,192,138,0)} }
-  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:22px; }
-  .kpi { background:linear-gradient(160deg,#16171f,#101117); border:1px solid #23242e; border-radius:14px; padding:16px; position:relative; overflow:hidden; }
-  .kpi::before { content:""; position:absolute; top:0; left:0; width:3px; height:100%; background:#e8b04b; }
-  .kpi .v { font-size:30px; font-weight:800; color:#f4d58d; }
-  .kpi .l { font-size:11px; color:#9a9ba6; margin-top:4px; text-transform:uppercase; letter-spacing:.5px; }
-  .kpi.alert .v { color:#ff7a7a; }
-  .kpi.alert::before { background:#c0392b; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; }
-  .card { background:#13141b; border:1px solid #23242e; border-radius:14px; padding:16px; }
-  .card h2 { font-size:14px; text-transform:uppercase; letter-spacing:1px; color:#e8b04b; margin-bottom:12px; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th { text-align:left; color:#8b8c98; font-weight:600; padding:8px 6px; border-bottom:1px solid #23242e; font-size:11px; text-transform:uppercase; }
-  td { padding:9px 6px; border-bottom:1px solid #1b1c24; }
-  tr:last-child td { border-bottom:none; }
-  .badge { display:inline-block; padding:3px 9px; border-radius:20px; font-size:11px; font-weight:600; }
-  .b-on { background:rgba(39,192,138,.15); color:#27c08a; }
-  .b-off { background:rgba(120,120,130,.15); color:#9a9ba6; }
-  .b-viaje { background:rgba(232,176,75,.15); color:#e8b04b; }
-  .b-pend { background:rgba(192,57,43,.18); color:#ff7a7a; }
-  .pill { display:inline-block; background:#1d1e27; color:#cfcfd6; padding:2px 8px; border-radius:6px; font-size:11px; margin:2px 4px 2px 0; }
-  .empty { color:#6a6b76; font-size:13px; padding:14px 0; text-align:center; }
-  .foot { margin-top:20px; text-align:center; color:#5a5b66; font-size:12px; }
-  .err { background:#2a1414; border:1px solid #5a2a2a; color:#ff9a9a; padding:14px; border-radius:10px; text-align:center; }
+  *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,"Segoe UI",Roboto,sans-serif;}
+  body{background:#f4f5f9;color:#1f2330;display:flex;min-height:100vh;}
+  /* Sidebar */
+  .side{width:248px;background:#0e0f15;color:#cfd0db;flex-shrink:0;padding:22px 16px;position:sticky;top:0;height:100vh;overflow:auto;}
+  .side .logo{display:flex;align-items:center;gap:10px;margin-bottom:26px;}
+  .side .logo .em{width:40px;height:40px;border-radius:10px;background:#15161d;border:1px solid #e8b04b;display:flex;align-items:center;justify-content:center;font-size:20px;}
+  .side .logo b{font-size:17px;letter-spacing:1px;color:#fff;}
+  .side .logo small{display:block;font-size:9px;color:#e8b04b;letter-spacing:2px;}
+  .side .sec{font-size:10px;color:#5d5f6e;text-transform:uppercase;letter-spacing:1px;margin:18px 8px 8px;}
+  .side a{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:9px;color:#b9bac6;text-decoration:none;font-size:14px;cursor:pointer;}
+  .side a:hover{background:#191a22;color:#fff;}
+  .side a.act{background:linear-gradient(90deg,#1d2740,#161824);color:#fff;}
+  .side a .ic{width:18px;text-align:center;opacity:.9;}
+  /* Main */
+  .main{flex:1;padding:24px 28px;overflow:auto;}
+  .head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:22px;}
+  .head h1{font-size:24px;font-weight:800;}
+  .head p{font-size:13px;color:#7b7e8d;}
+  .head .tools{display:flex;gap:10px;align-items:center;}
+  .chip{background:#fff;border:1px solid #e3e5ee;border-radius:10px;padding:9px 14px;font-size:13px;color:#444;display:flex;align-items:center;gap:7px;}
+  .chip.dark{background:#0e0f15;color:#fff;border:none;cursor:pointer;}
+  .live{font-size:12px;color:#27a06b;display:flex;align-items:center;gap:6px;}
+  .ldot{width:8px;height:8px;border-radius:50%;background:#27a06b;}
+  /* KPIs */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:18px;}
+  .kpi{background:#fff;border:1px solid #eceef4;border-radius:16px;padding:16px;display:flex;gap:13px;align-items:center;box-shadow:0 1px 3px rgba(20,20,40,.04);}
+  .kpi .ico{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;}
+  .kpi .l{font-size:12px;color:#8a8d9c;}
+  .kpi .v{font-size:26px;font-weight:800;line-height:1.1;}
+  .kpi .s{font-size:11px;color:#27a06b;margin-top:2px;}
+  .i1{background:#eef0ff;color:#5b6cff;} .i2{background:#e7f8ef;color:#22b07d;}
+  .i3{background:#eaf3ff;color:#3b8ff0;} .i4{background:#fff0e6;color:#ff8a3c;}
+  .i5{background:#f0eaff;color:#8b5bff;} .i6{background:#e7f9f5;color:#13b8a6;}
+  /* Cards grid */
+  .row{display:grid;gap:16px;margin-bottom:16px;}
+  .r3{grid-template-columns:1.3fr 1fr 1.1fr;}
+  .r2{grid-template-columns:1fr 1.2fr;}
+  @media(max-width:1100px){.r3,.r2{grid-template-columns:1fr;}}
+  .card{background:#fff;border:1px solid #eceef4;border-radius:16px;padding:18px;box-shadow:0 1px 3px rgba(20,20,40,.04);}
+  .card h3{font-size:15px;font-weight:700;margin-bottom:3px;}
+  .card .sub{font-size:11px;color:#9a9db0;margin-bottom:14px;}
+  .chartbox{position:relative;height:240px;}
+  .chartbox.sm{height:210px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{text-align:left;color:#9a9db0;font-weight:600;font-size:11px;text-transform:uppercase;padding:8px 6px;border-bottom:1px solid #eceef4;}
+  td{padding:10px 6px;border-bottom:1px solid #f2f3f8;}
+  tr:last-child td{border-bottom:none;}
+  .badge{padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;}
+  .bp{background:#fff0e6;color:#e07b2e;} .bo{background:#e7f8ef;color:#22b07d;}
+  .bv{background:#fff5d6;color:#c89400;}
+  .pill{display:inline-block;background:#f0f1f6;color:#555;padding:2px 8px;border-radius:6px;font-size:11px;margin:2px 3px 2px 0;}
+  .empty{color:#a9abb8;font-size:13px;text-align:center;padding:16px;}
+  .foot{text-align:center;color:#aaadbb;font-size:12px;margin-top:14px;}
+  .err{background:#fde8e8;border:1px solid #f5c2c2;color:#c0392b;padding:14px;border-radius:10px;text-align:center;}
 </style>
 </head>
 <body>
-  <div class="top">
-    <div class="brand">
-      <div class="logo">&#129413;</div>
-      <div><h1>Panel <span>El Cuervo</span></h1><p>Centro de control &middot; Barranca</p></div>
+  <div class="side">
+    <div class="logo"><div class="em">&#129413;</div><div><b>EL CUERVO</b><small>RED DE SERVICIOS</small></div></div>
+    <div class="sec">Módulo de análisis</div>
+    <a class="act"><span class="ic">&#9632;</span> Resumen general</a>
+    <a><span class="ic">&#128661;</span> Transporte</a>
+    <a><span class="ic">&#128218;</span> Educación</a>
+    <a><span class="ic">&#128737;</span> Seguridad</a>
+    <a><span class="ic">&#127869;</span> Gastronomía</a>
+    <div class="sec">Red</div>
+    <a><span class="ic">&#129309;</span> Proveedores</a>
+    <a><span class="ic">&#127903;</span> Tickets</a>
+    <div class="sec">Estado</div>
+    <div style="padding:12px;background:#13141b;border-radius:10px;font-size:12px;color:#8a8c98;">
+      <div style="color:#27c08a;">&#9679; Bot en línea</div>
+      <div style="margin-top:6px;">Actualizado:<br><span id="upd2" style="color:#cfd0db;">—</span></div>
     </div>
-    <div class="live"><span class="dot"></span> En vivo &middot; <span id="upd">cargando&hellip;</span></div>
   </div>
-  <div id="root"><p class="empty">Cargando datos&hellip;</p></div>
-  <div class="foot">El Cuervo &#129413; &middot; actualizaci&oacute;n autom&aacute;tica cada 10 s</div>
+
+  <div class="main">
+    <div class="head">
+      <div><h1>Dashboard Integral de Servicios</h1><p>Monitoreo operativo de El Cuervo · Barranca</p></div>
+      <div class="tools">
+        <span class="chip" id="fecha">Hoy: —</span>
+        <span class="live"><span class="ldot"></span> En vivo</span>
+        <span class="chip dark" onclick="load()">&#8635; Actualizar</span>
+      </div>
+    </div>
+    <div id="root"><p class="empty">Cargando datos…</p></div>
+    <div class="foot">El Cuervo &#169; 2026 · actualización automática cada 15 s</div>
+  </div>
+
 <script>
 const clave = new URLSearchParams(location.search).get('clave') || '';
 const $ = s => document.querySelector(s);
-function card(title, body){ return `<div class="card"><h2>${title}</h2>${body}</div>`; }
-function render(d){
-  const k = d.kpis;
-  const kpi = (v,l,alert)=>`<div class="kpi ${alert?'alert':''}"><div class="v">${v}</div><div class="l">${l}</div></div>`;
-  let html = `<div class="kpis">
-    ${kpi(k.solicitudes_en_curso + k.clases_en_curso,'Solicitudes en curso', (k.solicitudes_en_curso+k.clases_en_curso)>0)}
-    ${kpi(k.conductores_activos+'/'+k.conductores_total,'Conductores activos')}
-    ${kpi(k.profesores_total,'Profesores')}
-    ${kpi(k.proveedores_total,'Proveedores')}
-    ${kpi(k.proveedores_pendientes,'Por validar', k.proveedores_pendientes>0)}
-    ${kpi(k.tickets_nuevos,'Tickets nuevos', k.tickets_nuevos>0)}
-    ${kpi(k.sesiones_activas,'Chats activos')}
-  </div>`;
-  let cond = '<table><tr><th>Conductor</th><th>Placa</th><th>Estado</th></tr>';
-  d.conductores.forEach(c=>{
-    let est = c.en_viaje? '<span class="badge b-viaje">En viaje</span>' : (c.activo? '<span class="badge b-on">Activo</span>':'<span class="badge b-off">Pausado</span>');
-    cond += `<tr><td>${c.nombre}</td><td>${c.placa}</td><td>${est}</td></tr>`;
-  });
-  cond += '</table>';
-  let prof = d.profesores.length? '<table><tr><th>Profesor</th><th>Niveles</th><th>Modalidad</th></tr>' : '';
-  d.profesores.forEach(p=>{
-    const niv = (p.niveles||[]).map(n=>`<span class="pill">${n}</span>`).join('');
-    const mod = (p.modalidad||[]).map(m=>`<span class="pill">${m}</span>`).join('');
-    prof += `<tr><td>${p.nombre}</td><td>${niv}</td><td>${mod}</td></tr>`;
-  });
-  prof += d.profesores.length? '</table>' : '<p class="empty">Sin profesores registrados</p>';
-  let pt = Object.entries(d.proveedores_por_tipo).map(([t,n])=>`<span class="pill">${t.split('(')[0].trim()}: ${n}</span>`).join(' ');
-  let prov = pt? `<div style="margin-bottom:10px">${pt}</div>` : '';
-  if(d.proveedores.length){
-    prov += '<table><tr><th>Nombre</th><th>Tipo</th><th>Detalle</th><th>Estado</th></tr>';
-    d.proveedores.forEach(p=>{
-      let det = p.negocio || p.placa || p.detalle || '&mdash;';
-      let badge = p.estado==='PENDIENTE_VALIDACION'? '<span class="badge b-pend">Por validar</span>':'<span class="badge b-on">OK</span>';
-      prov += `<tr><td>${p.nombre||'&mdash;'}</td><td>${(p.tipo||'').split('(')[0].trim()}</td><td>${det}</td><td>${badge}</td></tr>`;
-    });
-    prov += '</table>';
-  } else { prov += '<p class="empty">Sin registros a&uacute;n</p>'; }
-  let tk = `<div style="margin-bottom:10px"><span class="pill">Nuevos: ${d.tickets.nuevos}</span><span class="pill">En proceso: ${d.tickets.en_proceso}</span><span class="pill">Resueltos: ${d.tickets.resueltos}</span></div>`;
-  if(d.tickets.lista.length){
-    tk += '<table><tr><th>ID</th><th>Estado</th></tr>';
-    d.tickets.lista.forEach(t=>{ tk += `<tr><td>${t.id||'&mdash;'}</td><td>${t.estado||''}</td></tr>`; });
-    tk += '</table>';
-  } else { tk += '<p class="empty">Sin tickets</p>'; }
-  html += '<div class="grid">'
-    + card('Conductores', cond)
-    + card('Profesores', prof)
-    + card('Proveedores registrados', prov)
-    + card('Tickets / Reclamos', tk)
-    + '</div>';
-  $('#root').innerHTML = html;
-  $('#upd').textContent = d.actualizado;
+let charts = {};
+const PAL = ['#5b6cff','#22b07d','#ff8a3c','#8b5bff','#13b8a6','#f0567a','#3b8ff0','#c89400'];
+
+function kpi(ico,cls,val,lab,sub){
+  return `<div class="kpi"><div class="ico ${cls}">${ico}</div><div><div class="l">${lab}</div><div class="v">${val}</div>${sub?`<div class="s">${sub}</div>`:''}</div></div>`;
 }
+function destroyCharts(){ Object.values(charts).forEach(c=>{try{c.destroy()}catch(e){}}); charts={}; }
+
+function render(d){
+  destroyCharts();
+  const k=d.kpis;
+  let html = `<div class="kpis">
+    ${kpi('&#128203;','i1',k.solicitudes_hoy,'Solicitudes hoy')}
+    ${kpi('&#9989;','i2',k.servicios_completados,'Servicios completados')}
+    ${kpi('&#128661;','i4',k.conductores_activos+'/'+k.conductores_total,'Conductores activos', k.conductores_en_ruta+' en ruta')}
+    ${kpi('&#128218;','i3',k.profesores_total,'Profesores')}
+    ${kpi('&#127970;','i5',k.proveedores_total,'Proveedores', k.proveedores_pendientes+' por validar')}
+    ${kpi('&#128202;','i6',k.tasa_atencion+'%','Tasa de atención')}
+  </div>`;
+
+  html += `<div class="row r3">
+    <div class="card"><h3>Tendencia de solicitudes</h3><div class="sub">Últimos 7 días</div><div class="chartbox"><canvas id="cTend"></canvas></div></div>
+    <div class="card"><h3>Solicitudes por categoría</h3><div class="sub">Distribución</div><div class="chartbox"><canvas id="cCat"></canvas></div></div>
+    <div class="card"><h3>Estado de servicios</h3><div class="sub">Total ${k.servicios_total}</div><div class="chartbox"><canvas id="cEst"></canvas></div></div>
+  </div>`;
+
+  html += `<div class="row r2">
+    <div class="card"><h3>Ranking de proveedores</h3><div class="sub">Por servicios atendidos</div><div id="rank"></div></div>
+    <div class="card"><h3>Resumen por categoría</h3><div class="sub">Solicitudes vs atendidos</div><div id="tcat"></div></div>
+  </div>`;
+
+  html += `<div class="row r2">
+    <div class="card"><h3>Proveedores registrados</h3><div class="sub">${k.proveedores_pendientes} por validar</div><div id="prov"></div></div>
+    <div class="card"><h3>Conductores</h3><div class="sub">${k.conductores_activos} activos</div><div id="cond"></div></div>
+  </div>`;
+
+  $('#root').innerHTML = html;
+  $('#upd2').textContent = d.actualizado; $('#fecha').textContent = 'Hoy: '+d.actualizado.split(' ')[0];
+
+  // Ranking
+  let rk = d.ranking_proveedores.length? '<table><tr><th>#</th><th>Proveedor</th><th>Atendidos</th></tr>' : '';
+  d.ranking_proveedores.forEach((r,i)=>{ rk+=`<tr><td>${i+1}</td><td>${r.proveedor}</td><td><b>${r.atendidos}</b></td></tr>`; });
+  rk += d.ranking_proveedores.length? '</table>' : '<p class="empty">Aún sin servicios atendidos</p>';
+  $('#rank').innerHTML = rk;
+
+  // Tabla categoría
+  let tc = d.tabla_categoria.length? '<table><tr><th>Categoría</th><th>Solicitudes</th><th>Atendidos</th></tr>' : '';
+  d.tabla_categoria.forEach(r=>{ tc+=`<tr><td>${r.categoria}</td><td>${r.solicitudes}</td><td>${r.atendidos}</td></tr>`; });
+  tc += d.tabla_categoria.length? '</table>' : '<p class="empty">Sin servicios registrados aún</p>';
+  $('#tcat').innerHTML = tc;
+
+  // Proveedores
+  let pv = d.proveedores.length? '<table><tr><th>Nombre</th><th>Tipo</th><th>Estado</th></tr>' : '';
+  d.proveedores.slice(0,8).forEach(p=>{ let b=p.estado==='PENDIENTE_VALIDACION'?'<span class="badge bp">Por validar</span>':'<span class="badge bo">OK</span>';
+    pv+=`<tr><td>${p.nombre||'—'}</td><td>${(p.tipo||'').split('(')[0].trim()}</td><td>${b}</td></tr>`; });
+  pv += d.proveedores.length? '</table>' : '<p class="empty">Sin registros aún</p>';
+  $('#prov').innerHTML = pv;
+
+  // Conductores
+  let cd='<table><tr><th>Conductor</th><th>Placa</th><th>Estado</th></tr>';
+  d.conductores.forEach(c=>{ let e=c.en_viaje?'<span class="badge bv">En viaje</span>':(c.activo?'<span class="badge bo">Activo</span>':'<span class="badge" style="background:#eef0f4;color:#9a9db0">Pausado</span>');
+    cd+=`<tr><td>${c.nombre}</td><td>${c.placa}</td><td>${e}</td></tr>`; });
+  cd+='</table>'; $('#cond').innerHTML=cd;
+
+  // Gráficos al final, protegidos (si el CDN de Chart.js no carga, las tablas igual se ven)
+  if(typeof Chart==='undefined'){ return; }
+  try{
+    charts.tend = new Chart($('#cTend'),{type:'line',data:{labels:d.tendencia_7dias.map(x=>x.dia),
+      datasets:[{data:d.tendencia_7dias.map(x=>x.total),borderColor:'#5b6cff',backgroundColor:'rgba(91,108,255,.12)',fill:true,tension:.35,pointBackgroundColor:'#5b6cff'}]},
+      options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0}}},maintainAspectRatio:false}});
+    const cat=Object.entries(d.servicios_por_categoria);
+    charts.cat = new Chart($('#cCat'),{type:'doughnut',data:{labels:cat.map(x=>x[0]),
+      datasets:[{data:cat.map(x=>x[1]),backgroundColor:PAL}]},
+      options:{plugins:{legend:{position:'right',labels:{boxWidth:12,font:{size:11}}}},cutout:'62%',maintainAspectRatio:false}});
+    const est=d.estado_servicios;
+    charts.est = new Chart($('#cEst'),{type:'doughnut',data:{labels:['Pendientes','Atendidos'],
+      datasets:[{data:[est.solicitado,est.atendido],backgroundColor:['#ff8a3c','#22b07d']}]},
+      options:{plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11}}}},cutout:'62%',maintainAspectRatio:false}});
+  }catch(e){ console.error('charts',e); }
+}
+
 async function load(){
   try{
-    const r = await fetch('/api/dashboard?clave='+encodeURIComponent(clave));
-    if(!r.ok){ $('#root').innerHTML = '<div class="err">Acceso denegado o error ('+r.status+'). Verifica la clave en la URL.</div>'; return; }
+    const r=await fetch('/api/dashboard?clave='+encodeURIComponent(clave));
+    if(!r.ok){ $('#root').innerHTML='<div class="err">Acceso denegado o error ('+r.status+'). Verifica la clave en la URL.</div>'; return; }
     render(await r.json());
-  }catch(e){ $('#root').innerHTML = '<div class="err">No se pudo cargar: '+e+'</div>'; }
+  }catch(e){ $('#root').innerHTML='<div class="err">No se pudo cargar: '+e+'</div>'; }
 }
-load();
-setInterval(load, 10000);
+load(); setInterval(load,15000);
 </script>
 </body>
 </html>'''
@@ -6039,12 +6189,65 @@ async def api_dashboard(clave: str = ""):
     # Sesiones activas ahora
     sesiones_activas = sum(1 for s in sesiones.values() if s.get("estado") not in (S_MENU, None))
 
+    # Servicios (desde disco) — analítica para el dashboard integral
+    servicios = []
+    try:
+        if os.path.exists(SERVICIOS_FILE):
+            with open(SERVICIOS_FILE, "r", encoding="utf-8") as f:
+                servicios = json.load(f) or []
+    except Exception:
+        servicios = []
+
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    serv_total = len(servicios)
+    serv_hoy = sum(1 for s in servicios if s.get("dia") == hoy)
+    completados = sum(1 for s in servicios if s.get("estado") == "atendido")
+    pendientes_serv = sum(1 for s in servicios if s.get("estado") == "solicitado")
+    tasa_atencion = round(completados / serv_total * 100, 1) if serv_total else 0.0
+    ingresos = round(sum(s.get("monto", 0) or 0 for s in servicios if s.get("estado") == "atendido"), 2)
+
+    # por categoría
+    serv_por_categoria = {}
+    for s in servicios:
+        c = s.get("categoria", "Otro")
+        serv_por_categoria[c] = serv_por_categoria.get(c, 0) + 1
+
+    # tendencia últimos 7 días
+    tendencia = []
+    for i in range(6, -1, -1):
+        dia = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+        etiqueta = (datetime.now() - timedelta(days=i)).strftime("%d/%m")
+        tendencia.append({"dia": etiqueta, "total": sum(1 for s in servicios if s.get("dia") == dia)})
+
+    # tabla por categoría: solicitudes vs atendidos
+    tabla_categoria = []
+    for c in sorted(serv_por_categoria.keys()):
+        sols = serv_por_categoria[c]
+        atn = sum(1 for s in servicios if s.get("categoria") == c and s.get("estado") == "atendido")
+        tabla_categoria.append({"categoria": c, "solicitudes": sols, "atendidos": atn})
+
+    # ranking de proveedores (por servicios atendidos)
+    rank = {}
+    for s in servicios:
+        if s.get("estado") == "atendido" and s.get("proveedor"):
+            rank[s["proveedor"]] = rank.get(s["proveedor"], 0) + 1
+    ranking = sorted([{"proveedor": k, "atendidos": v} for k, v in rank.items()],
+                     key=lambda x: x["atendidos"], reverse=True)[:5]
+
     return {
         "kpis": {
+            "solicitudes_hoy": serv_hoy,
+            "servicios_completados": completados,
+            "servicios_total": serv_total,
+            "servicios_pendientes": pendientes_serv,
+            "tasa_atencion": tasa_atencion,
+            "ingresos": ingresos,
             "proveedores_total": len(proveedores),
             "proveedores_pendientes": sum(1 for p in proveedores if p.get("estado") == "PENDIENTE_VALIDACION"),
+            "negocios_afiliados": sum(1 for p in proveedores if "gastron" in p.get("tipo", "").lower()),
             "conductores_total": len(CONDUCTORES),
             "conductores_activos": activos,
+            "conductores_en_ruta": len(viajes_activos),
             "profesores_total": len(PROFESORES),
             "tickets_total": len(tickets),
             "tickets_nuevos": tk_nuevos,
@@ -6052,6 +6255,11 @@ async def api_dashboard(clave: str = ""):
             "clases_en_curso": len(clases_pendientes),
             "sesiones_activas": sesiones_activas,
         },
+        "servicios_por_categoria": serv_por_categoria,
+        "tendencia_7dias": tendencia,
+        "estado_servicios": {"solicitado": pendientes_serv, "atendido": completados},
+        "tabla_categoria": tabla_categoria,
+        "ranking_proveedores": ranking,
         "proveedores_por_tipo": prov_por_tipo,
         "proveedores": list(reversed(proveedores))[:50],
         "conductores": conductores,
