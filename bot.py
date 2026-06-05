@@ -2978,6 +2978,15 @@ MSG_UNETE_CONDICIONES = (
 )
 
 PROVEEDORES_FILE = os.path.join(DATA_DIR, "proveedores.json")
+
+# Motivos de rechazo predefinidos (código -> texto que recibe el candidato)
+MOTIVOS_RECHAZO = {
+    "datos": "los datos proporcionados están incompletos o no se pudieron verificar",
+    "documentos": "faltan documentos o no se pudo validar tus antecedentes",
+    "requisitos": "por ahora no cumple con los requisitos de la red",
+    "zona": "por el momento no cubrimos tu zona o rubro",
+    "otro": "no se ajusta al perfil que buscamos en esta etapa",
+}
 SERVICIOS_FILE = os.path.join(DATA_DIR, "servicios.json")
 
 CATEGORIA_SERVICIO = {
@@ -3185,14 +3194,23 @@ async def enviar_correo_registro(registro: dict):
 
     base = os.getenv("PUBLIC_URL", "https://barranca-movil-bot.onrender.com").rstrip("/")
     pid = registro.get("id", "")
+    url_val = f"{base}/proveedor/validar?clave={ADMIN_KEY}&id={pid}"
     url_ok = f"{base}/proveedor/aprobar?clave={ADMIN_KEY}&id={pid}"
-    url_no = f"{base}/proveedor/rechazar?clave={ADMIN_KEY}&id={pid}"
+    rechazos = "".join(
+        f'<a href="{base}/proveedor/rechazar?clave={ADMIN_KEY}&id={pid}&motivo={cod}" '
+        f'style="display:inline-block;background:#3a1c1c;color:#ff9a9a;text-decoration:none;'
+        f'padding:7px 14px;border-radius:7px;font-size:12px;margin:4px">✕ {txt[:34]}</a>'
+        for cod, txt in MOTIVOS_RECHAZO.items())
     botones = f"""
-      <div style="padding:20px 22px;text-align:center;background:#f4f5f9">
+      <div style="padding:22px;text-align:center;background:#f4f5f9">
+        <a href="{url_val}" style="display:inline-block;background:#e8b04b;color:#1a1a1a;
+           text-decoration:none;padding:12px 26px;border-radius:8px;font-weight:bold;margin:4px">🔍 Poner en validación</a>
         <a href="{url_ok}" style="display:inline-block;background:#22b07d;color:#fff;
-           text-decoration:none;padding:12px 30px;border-radius:8px;font-weight:bold;margin:0 6px">✅ Aprobar</a>
-        <a href="{url_no}" style="display:inline-block;background:#c0392b;color:#fff;
-           text-decoration:none;padding:12px 30px;border-radius:8px;font-weight:bold;margin:0 6px">❌ Rechazar</a>
+           text-decoration:none;padding:12px 26px;border-radius:8px;font-weight:bold;margin:4px">✅ Aprobar</a>
+        <div style="margin-top:14px;border-top:1px solid #e0e0e8;padding-top:12px">
+          <div style="font-size:12px;color:#999;margin-bottom:6px">Rechazar por:</div>
+          {rechazos}
+        </div>
       </div>"""
     html = html.replace(
         '<div style="padding:14px 22px;background:#f4f5f9;border-radius:0 0 10px 10px;',
@@ -6222,6 +6240,26 @@ def _pagina_resultado(titulo, mensaje, color):
       </div></body></html>""")
 
 
+@app.get("/proveedor/validar")
+async def proveedor_validar(clave: str = "", id: str = ""):
+    if clave != ADMIN_KEY:
+        return _pagina_resultado("Acceso denegado", "Clave incorrecta.", "🔒")
+    reg = actualizar_estado_proveedor(id, "EN_VALIDACION")
+    if not reg:
+        return _pagina_resultado("No encontrado", f"No se encontró el registro {id}.", "⚠️")
+    try:
+        await enviar_mensaje(reg.get("telefono", ""),
+            f"🔍 *Hola {reg.get('nombre','')},*\n\n"
+            "Recibimos tu registro en *El Cuervo* 🦅 y estamos *verificando tus datos*. "
+            "Te confirmaremos apenas termine la validación.\n\n"
+            "_Gracias por tu paciencia._")
+    except Exception:
+        pass
+    return _pagina_resultado("En validación",
+        f"<b>{reg.get('nombre','')}</b> ({reg.get('tipo','')}) quedó <b>EN VALIDACIÓN</b>. "
+        "Todavía NO está activo en el bot. Se le avisó que estás verificando sus datos.", "🔍")
+
+
 @app.get("/proveedor/aprobar")
 async def proveedor_aprobar(clave: str = "", id: str = ""):
     if clave != ADMIN_KEY:
@@ -6229,7 +6267,6 @@ async def proveedor_aprobar(clave: str = "", id: str = ""):
     reg = actualizar_estado_proveedor(id, "APROBADO")
     if not reg:
         return _pagina_resultado("No encontrado", f"No se encontró el registro {id}.", "⚠️")
-    # avisar al proveedor que fue aprobado
     try:
         await enviar_mensaje(reg.get("telefono", ""),
             f"🎉 *¡Felicidades, {reg.get('nombre','')}!*\n\n"
@@ -6244,15 +6281,24 @@ async def proveedor_aprobar(clave: str = "", id: str = ""):
 
 
 @app.get("/proveedor/rechazar")
-async def proveedor_rechazar(clave: str = "", id: str = ""):
+async def proveedor_rechazar(clave: str = "", id: str = "", motivo: str = "otro"):
     if clave != ADMIN_KEY:
         return _pagina_resultado("Acceso denegado", "Clave incorrecta.", "🔒")
     reg = actualizar_estado_proveedor(id, "RECHAZADO")
     if not reg:
         return _pagina_resultado("No encontrado", f"No se encontró el registro {id}.", "⚠️")
+    motivo_txt = MOTIVOS_RECHAZO.get(motivo, MOTIVOS_RECHAZO["otro"])
+    try:
+        await enviar_mensaje(reg.get("telefono", ""),
+            f"Hola {reg.get('nombre','')}, gracias por tu interés en *El Cuervo* 🦅\n\n"
+            f"Por ahora *no pudimos aprobar tu registro* porque {motivo_txt}.\n\n"
+            "Puedes volver a postular más adelante corrigiendo este punto. "
+            "Agradecemos tu comprensión.")
+    except Exception:
+        pass
     return _pagina_resultado("Registro rechazado",
-        f"<b>{reg.get('nombre','')}</b> ({reg.get('tipo','')}) fue marcado como <b>RECHAZADO</b>. "
-        "No se le notificó nada al solicitante.", "❌")
+        f"<b>{reg.get('nombre','')}</b> ({reg.get('tipo','')}) fue <b>RECHAZADO</b>.<br>"
+        f"Motivo enviado: <i>{motivo_txt}</i>", "❌")
 
 
 @app.get("/proveedores")
@@ -6269,7 +6315,7 @@ async def get_proveedores(clave: str = ""):
         data_ord = list(reversed(data))
         return {
             "total": len(data),
-            "pendientes": sum(1 for p in data if p.get("estado") == "PENDIENTE_VALIDACION"),
+            "pendientes": sum(1 for p in data if p.get("estado") in ("PENDIENTE_VALIDACION", "EN_VALIDACION")),
             "por_tipo": {t: sum(1 for p in data if p.get("tipo") == t)
                          for t in sorted({p.get("tipo", "") for p in data})},
             "proveedores": data_ord,
@@ -6429,7 +6475,7 @@ function render(d){
 
   // Proveedores
   let pv = d.proveedores.length? '<table><tr><th>Nombre</th><th>Tipo</th><th>Estado</th></tr>' : '';
-  d.proveedores.slice(0,8).forEach(p=>{ let b=p.estado==='PENDIENTE_VALIDACION'?'<span class="badge bp">Por validar</span>':'<span class="badge bo">OK</span>';
+  d.proveedores.slice(0,8).forEach(p=>{ let b; if(p.estado==='APROBADO'){b='<span class="badge bo">Activo</span>';} else if(p.estado==='EN_VALIDACION'){b='<span class="badge bv">En validación</span>';} else if(p.estado==='RECHAZADO'){b='<span class="badge bp">Rechazado</span>';} else {b='<span class="badge bp">Por validar</span>';}
     pv+=`<tr><td>${p.nombre||'—'}</td><td>${(p.tipo||'').split('(')[0].trim()}</td><td>${b}</td></tr>`; });
   pv += d.proveedores.length? '</table>' : '<p class="empty">Sin registros aún</p>';
   $('#prov').innerHTML = pv;
@@ -6582,7 +6628,7 @@ async def api_dashboard(clave: str = ""):
             "tasa_atencion": tasa_atencion,
             "ingresos": ingresos,
             "proveedores_total": len(proveedores),
-            "proveedores_pendientes": sum(1 for p in proveedores if p.get("estado") == "PENDIENTE_VALIDACION"),
+            "proveedores_pendientes": sum(1 for p in proveedores if p.get("estado") in ("PENDIENTE_VALIDACION", "EN_VALIDACION")),
             "negocios_afiliados": sum(1 for p in proveedores if "gastron" in p.get("tipo", "").lower()),
             "conductores_total": len(CONDUCTORES),
             "conductores_activos": activos,
