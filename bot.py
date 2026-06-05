@@ -3072,6 +3072,50 @@ def guardar_proveedor(registro: dict):
         return None
 
 
+def actualizar_estado_proveedor(pid: str, nuevo_estado: str):
+    """Cambia el estado de un proveedor (por id) en disco. Devuelve el registro o None."""
+    try:
+        if not os.path.exists(PROVEEDORES_FILE):
+            return None
+        with open(PROVEEDORES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f) or []
+        encontrado = None
+        for r in data:
+            if r.get("id") == pid:
+                r["estado"] = nuevo_estado
+                r["validado_el"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                encontrado = r
+                break
+        if not encontrado:
+            return None
+        tmp = PROVEEDORES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, PROVEEDORES_FILE)
+        print(f"[PROVEEDOR] {pid} -> {nuevo_estado}", flush=True)
+        return encontrado
+    except Exception as e:
+        print(f"[PROVEEDOR ERROR] actualizar: {e}", flush=True)
+        return None
+
+
+def cargar_proveedores_aprobados(filtro_tipo: str = "") -> list:
+    """Devuelve los proveedores APROBADOS (opcionalmente filtrando por texto del tipo)."""
+    try:
+        if not os.path.exists(PROVEEDORES_FILE):
+            return []
+        with open(PROVEEDORES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f) or []
+        out = [r for r in data if r.get("estado") == "APROBADO"]
+        if filtro_tipo:
+            ft = filtro_tipo.lower()
+            out = [r for r in out if ft in (r.get("tipo", "").lower())]
+        return out
+    except Exception as e:
+        print(f"[PROVEEDOR ERROR] cargar aprobados: {e}", flush=True)
+        return []
+
+
 def _enviar_correo_sync(asunto: str, cuerpo_html: str, cuerpo_texto: str):
     """Envía un correo vía SMTP (Gmail por defecto). Lee credenciales de env.
     Variables: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_TO (destino).
@@ -3138,6 +3182,21 @@ async def enviar_correo_registro(registro: dict):
     </div>"""
     texto = "El Cuervo — Nuevo registro\n\n" + "\n".join(f"{k}: {v}" for k, v in filas)
     asunto = f"🦅 Nuevo registro El Cuervo — {tipo}: {nombre}"
+
+    base = os.getenv("PUBLIC_URL", "https://barranca-movil-bot.onrender.com").rstrip("/")
+    pid = registro.get("id", "")
+    url_ok = f"{base}/proveedor/aprobar?clave={ADMIN_KEY}&id={pid}"
+    url_no = f"{base}/proveedor/rechazar?clave={ADMIN_KEY}&id={pid}"
+    botones = f"""
+      <div style="padding:20px 22px;text-align:center;background:#f4f5f9">
+        <a href="{url_ok}" style="display:inline-block;background:#22b07d;color:#fff;
+           text-decoration:none;padding:12px 30px;border-radius:8px;font-weight:bold;margin:0 6px">✅ Aprobar</a>
+        <a href="{url_no}" style="display:inline-block;background:#c0392b;color:#fff;
+           text-decoration:none;padding:12px 30px;border-radius:8px;font-weight:bold;margin:0 6px">❌ Rechazar</a>
+      </div>"""
+    html = html.replace(
+        '<div style="padding:14px 22px;background:#f4f5f9;border-radius:0 0 10px 10px;',
+        botones + '<div style="padding:14px 22px;background:#f4f5f9;border-radius:0 0 10px 10px;')
     try:
         await asyncio.to_thread(_enviar_correo_sync, asunto, html, texto)
     except Exception as e:
@@ -3184,6 +3243,7 @@ async def _unete_finalizar(numero: str, sesion: dict):
     """Guarda el registro, avisa al admin y agradece al interesado."""
     d = sesion["datos"]
     registro = {
+        "id": f"PV-{int(time.time()*1000) % 100000000}",
         "tipo": d.get("unete_tipo_label", ""),
         "nombre": d.get("nombre", ""),
         "telefono": numero,
@@ -3244,6 +3304,23 @@ async def _tec_finalizar(numero: str, sesion: dict):
             f"📍 {d.get('tec_direccion','(no indicada)')}\n"
             f"🕒 {d.get('tec_cuando','(a coordinar)')}\n\n"
             "_Asignar un técnico y coordinar._")
+
+    # Notificar a los técnicos APROBADOS (los que aprobaste por correo)
+    tecnicos = cargar_proveedores_aprobados("técnico")
+    if tecnicos:
+        aviso_tec = (
+            "🔧 *Nueva solicitud de servicio técnico*\n\n"
+            f"🛠️ {d.get('tec_oficio','')}\n"
+            f"📝 {d.get('tec_problema','')}\n"
+            f"📍 {d.get('tec_direccion','(no indicada)')}\n"
+            f"🕒 {d.get('tec_cuando','(a coordinar)')}\n\n"
+            f"📱 Contacto del cliente: +{numero}\n"
+            f"👤 {d.get('nombre','(cliente)')}\n\n"
+            "_Si puedes atenderlo, comunícate directamente con el cliente para coordinar visita y precio._")
+        await asyncio.gather(*[
+            enviar_mensaje(t.get("telefono", ""), aviso_tec) for t in tecnicos if t.get("telefono")
+        ], return_exceptions=True)
+        print(f"[TEC] solicitud enviada a {len(tecnicos)} técnico(s) aprobado(s)", flush=True)
 
     sesion["estado"] = S_MENU
     sesion["datos"] = {}
@@ -6130,6 +6207,53 @@ async def update_ticket_estado(ticket_id: str, body: dict):
                     f"— Equipo El Cuervo 🚖")
             return {"ok": True, "ticket": t}
     raise HTTPException(status_code=404, detail="Ticket no encontrado")
+
+def _pagina_resultado(titulo, mensaje, color):
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1"><title>El Cuervo</title></head>
+    <body style="margin:0;background:#0a0b10;color:#e9e9ef;font-family:-apple-system,Segoe UI,Roboto,sans-serif;
+    display:flex;align-items:center;justify-content:center;min-height:100vh">
+      <div style="background:#13141b;border:1px solid #23242e;border-radius:18px;padding:40px 46px;text-align:center;max-width:440px">
+        <div style="font-size:54px;margin-bottom:10px">{color}</div>
+        <h1 style="color:#e8b04b;margin:0 0 8px;font-size:24px">{titulo}</h1>
+        <p style="color:#cfd0db;font-size:16px;line-height:1.5">{mensaje}</p>
+        <p style="color:#6a6b76;font-size:13px;margin-top:22px">El Cuervo 🦅 · Panel de validación</p>
+      </div></body></html>""")
+
+
+@app.get("/proveedor/aprobar")
+async def proveedor_aprobar(clave: str = "", id: str = ""):
+    if clave != ADMIN_KEY:
+        return _pagina_resultado("Acceso denegado", "Clave incorrecta.", "🔒")
+    reg = actualizar_estado_proveedor(id, "APROBADO")
+    if not reg:
+        return _pagina_resultado("No encontrado", f"No se encontró el registro {id}.", "⚠️")
+    # avisar al proveedor que fue aprobado
+    try:
+        await enviar_mensaje(reg.get("telefono", ""),
+            f"🎉 *¡Felicidades, {reg.get('nombre','')}!*\n\n"
+            "Tu registro en *El Cuervo* 🦅 fue *APROBADO*. "
+            "Ya eres parte de la red y empezarás a recibir solicitudes de clientes.\n\n"
+            "_Gracias por sumarte. ¡A trabajar juntos!_")
+    except Exception:
+        pass
+    return _pagina_resultado("Proveedor aprobado",
+        f"<b>{reg.get('nombre','')}</b> ({reg.get('tipo','')}) ya está <b>ACTIVO</b> en El Cuervo. "
+        "Se le notificó por WhatsApp.", "✅")
+
+
+@app.get("/proveedor/rechazar")
+async def proveedor_rechazar(clave: str = "", id: str = ""):
+    if clave != ADMIN_KEY:
+        return _pagina_resultado("Acceso denegado", "Clave incorrecta.", "🔒")
+    reg = actualizar_estado_proveedor(id, "RECHAZADO")
+    if not reg:
+        return _pagina_resultado("No encontrado", f"No se encontró el registro {id}.", "⚠️")
+    return _pagina_resultado("Registro rechazado",
+        f"<b>{reg.get('nombre','')}</b> ({reg.get('tipo','')}) fue marcado como <b>RECHAZADO</b>. "
+        "No se le notificó nada al solicitante.", "❌")
+
 
 @app.get("/proveedores")
 async def get_proveedores(clave: str = ""):
