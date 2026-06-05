@@ -3072,6 +3072,78 @@ def guardar_proveedor(registro: dict):
         return None
 
 
+def _enviar_correo_sync(asunto: str, cuerpo_html: str, cuerpo_texto: str):
+    """Envía un correo vía SMTP (Gmail por defecto). Lee credenciales de env.
+    Variables: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_TO (destino).
+    Si falta configuración, no hace nada (no rompe el flujo)."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    port = int(os.getenv("SMTP_PORT", "587"))
+    user = os.getenv("SMTP_USER", "").strip()
+    pwd = os.getenv("SMTP_PASS", "").strip()
+    destino = os.getenv("SMTP_TO", "").strip() or user
+    if not user or not pwd or not destino:
+        print("[CORREO] SMTP no configurado (faltan SMTP_USER/SMTP_PASS/SMTP_TO); se omite envío.", flush=True)
+        return False
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = asunto
+    msg["From"] = f"El Cuervo Bot <{user}>"
+    msg["To"] = destino
+    msg.attach(MIMEText(cuerpo_texto, "plain", "utf-8"))
+    msg.attach(MIMEText(cuerpo_html, "html", "utf-8"))
+    try:
+        with smtplib.SMTP(host, port, timeout=20) as server:
+            server.starttls()
+            server.login(user, pwd)
+            server.sendmail(user, [destino], msg.as_string())
+        print(f"[CORREO] enviado a {destino}: {asunto}", flush=True)
+        return True
+    except Exception as e:
+        print(f"[CORREO ERROR] {e}", flush=True)
+        return False
+
+
+async def enviar_correo_registro(registro: dict):
+    """Arma y envía (en hilo aparte) el correo de un nuevo registro de proveedor."""
+    tipo = registro.get("tipo", "")
+    nombre = registro.get("nombre", "")
+    tel = registro.get("telefono", "")
+    fecha = registro.get("fecha", "")
+    filas = [("Tipo", tipo), ("Nombre", nombre), ("WhatsApp", "+" + tel)]
+    if registro.get("negocio"):   filas.append(("Negocio", registro["negocio"]))
+    if registro.get("direccion"): filas.append(("Dirección", registro["direccion"]))
+    if registro.get("placa"):     filas.append(("Placa", registro["placa"]))
+    if registro.get("detalle"):   filas.append(("Detalle", registro["detalle"]))
+    filas.append(("Fecha", fecha))
+    filas.append(("Estado", registro.get("estado", "PENDIENTE_VALIDACION")))
+
+    filas_html = "".join(
+        f'<tr><td style="padding:8px 14px;background:#faf7ef;border:1px solid #eee;'
+        f'font-weight:bold;color:#8a6d1a;width:140px">{k}</td>'
+        f'<td style="padding:8px 14px;border:1px solid #eee;color:#222">{v}</td></tr>'
+        for k, v in filas)
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto">
+      <div style="background:#0e0f15;padding:18px 22px;border-radius:10px 10px 0 0">
+        <h2 style="color:#e8b04b;margin:0">🦅 El Cuervo — Nuevo registro</h2>
+        <p style="color:#cfd0db;margin:4px 0 0;font-size:13px">Solicitud para unirse a la red</p>
+      </div>
+      <table style="border-collapse:collapse;width:100%;font-size:14px">{filas_html}</table>
+      <div style="padding:14px 22px;background:#f4f5f9;border-radius:0 0 10px 10px;font-size:12px;color:#777">
+        Pendiente de validación · Responde al WhatsApp del solicitante para coordinar.
+      </div>
+    </div>"""
+    texto = "El Cuervo — Nuevo registro\n\n" + "\n".join(f"{k}: {v}" for k, v in filas)
+    asunto = f"🦅 Nuevo registro El Cuervo — {tipo}: {nombre}"
+    try:
+        await asyncio.to_thread(_enviar_correo_sync, asunto, html, texto)
+    except Exception as e:
+        print(f"[CORREO ERROR] async: {e}", flush=True)
+
+
 async def iniciar_unete(numero: str, sesion: dict):
     """Inicia el flujo de registro de proveedor/abonado."""
     sesion["estado"] = S_UNETE_TIPO
@@ -3143,6 +3215,9 @@ async def _unete_finalizar(numero: str, sesion: dict):
             f"{extra}"
             f"🕒 {registro['fecha']}\n\n"
             "_Pendiente de validación._")
+
+    # Enviar también por correo (para seguimiento y aprobación formal)
+    await enviar_correo_registro(registro)
 
     sesion["estado"] = S_MENU
     sesion["datos"] = {}
