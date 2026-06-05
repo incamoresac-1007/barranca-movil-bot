@@ -340,9 +340,7 @@ CONDUCTORES = {
 PROFESORES = {
     # IMPORTANTE: solo profesores verificados (DNI + antecedentes revisados FUERA del bot).
     # No guardar aquí datos sensibles de la verificación, solo lo operativo.
-    "51981469530": {"nombre": "Zoila Tello Manrique",
-                    "niveles": ["PRIMARIA"],
-                    "modalidad": ["presencial", "virtual"]},
+    # (Vacío: los profesores se registran por Únete y se aprueban por el flujo de validación.)
 }
 
 # Tarifas de Educación por HORA en soles. Edita estos montos cuando quieras.
@@ -2942,7 +2940,7 @@ def normalizar_nombre_persona(nombre: str) -> str:
     return " ".join(partes)
 
 def extraer_nombre_dni(texto: str):
-    """Separa nombre y DNI si el usuario escribe ambos juntos. Ej: 'Zoila Tello, 15862130'."""
+    """Separa nombre y DNI si el usuario escribe ambos juntos. Ej: 'Victor Calixto, 15862130'."""
     import re
     raw = (texto or "").strip()
     m = re.search(r"\b(\d{7,9})\b", raw)
@@ -6299,6 +6297,68 @@ async def proveedor_rechazar(clave: str = "", id: str = "", motivo: str = "otro"
     return _pagina_resultado("Registro rechazado",
         f"<b>{reg.get('nombre','')}</b> ({reg.get('tipo','')}) fue <b>RECHAZADO</b>.<br>"
         f"Motivo enviado: <i>{motivo_txt}</i>", "❌")
+
+
+@app.get("/admin/limpiar")
+async def admin_limpiar(clave: str = "", que: str = "", confirmar: str = ""):
+    """Limpia datos en disco para empezar de cero. NO toca conductores ni profesores (están en código).
+    Uso: /admin/limpiar?clave=ADMIN_KEY&que=todo&confirmar=SI
+    que = proveedores | servicios | todo"""
+    if clave != ADMIN_KEY:
+        return _pagina_resultado("Acceso denegado", "Clave incorrecta.", "🔒")
+
+    objetivos = {
+        "proveedores": [PROVEEDORES_FILE],
+        "servicios": [SERVICIOS_FILE],
+        "todo": [PROVEEDORES_FILE, SERVICIOS_FILE],
+    }
+    if que not in objetivos:
+        return _pagina_resultado("Falta indicar qué limpiar",
+            "Agrega <b>&amp;que=proveedores</b>, <b>&amp;que=servicios</b> o <b>&amp;que=todo</b> a la URL.", "⚠️")
+
+    if confirmar != "SI":
+        # contar lo que se borraría
+        resumen = []
+        for f in objetivos[que]:
+            n = 0
+            try:
+                if os.path.exists(f):
+                    with open(f, "r", encoding="utf-8") as fh:
+                        n = len(json.load(fh) or [])
+            except Exception:
+                n = 0
+            resumen.append(f"{os.path.basename(f)}: {n} registro(s)")
+        base = os.getenv("PUBLIC_URL", "https://barranca-movil-bot.onrender.com").rstrip("/")
+        url_conf = f"{base}/admin/limpiar?clave={ADMIN_KEY}&que={que}&confirmar=SI"
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1"><title>El Cuervo</title></head>
+        <body style="margin:0;background:#0a0b10;color:#e9e9ef;font-family:-apple-system,Segoe UI,Roboto,sans-serif;
+        display:flex;align-items:center;justify-content:center;min-height:100vh">
+          <div style="background:#13141b;border:1px solid #5a2a2a;border-radius:18px;padding:38px 44px;text-align:center;max-width:480px">
+            <div style="font-size:50px">⚠️</div>
+            <h1 style="color:#ff9a9a;margin:6px 0 10px;font-size:22px">Confirmar limpieza</h1>
+            <p style="color:#cfd0db;font-size:15px">Vas a borrar (<b>{que}</b>):</p>
+            <p style="color:#e8b04b;font-size:14px">{'<br>'.join(resumen)}</p>
+            <p style="color:#9a9ba6;font-size:13px">Los <b>conductores</b> y <b>profesores</b> NO se tocan.<br>Esta acción no se puede deshacer.</p>
+            <a href="{url_conf}" style="display:inline-block;background:#c0392b;color:#fff;text-decoration:none;
+               padding:13px 32px;border-radius:9px;font-weight:bold;margin-top:14px">Sí, borrar ahora</a>
+            <p style="color:#6a6b76;font-size:12px;margin-top:20px">El Cuervo 🦅</p>
+          </div></body></html>""")
+
+    # confirmado: vaciar archivos
+    borrados = []
+    for f in objetivos[que]:
+        try:
+            with open(f, "w", encoding="utf-8") as fh:
+                json.dump([], fh)
+            borrados.append(os.path.basename(f))
+            print(f"[LIMPIEZA] {f} vaciado", flush=True)
+        except Exception as e:
+            print(f"[LIMPIEZA ERROR] {f}: {e}", flush=True)
+    return _pagina_resultado("Limpieza completada",
+        f"Se limpiaron: <b>{', '.join(borrados)}</b>.<br>"
+        "Conductores y profesores intactos. Ya puedes empezar de cero. 🦅", "🧹")
 
 
 @app.get("/proveedores")
