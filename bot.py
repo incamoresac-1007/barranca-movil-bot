@@ -1041,6 +1041,10 @@ async def _notificar_proveedor_seg(numero_cliente: str, datos: dict):
 
     solicitudes_seg_pendientes[numero_cliente] = datos.copy()
     cotizaciones_seg_pendientes[numero_cliente] = []  # lista de cotizaciones recibidas
+    sid = registrar_servicio("SEGURIDAD", datos, numero_cliente)  # queda en el dashboard como "solicitado"
+    datos["id_servicio_seg"] = sid
+    if numero_cliente in solicitudes_seg_pendientes:
+        solicitudes_seg_pendientes[numero_cliente]["id_servicio_seg"] = sid
 
     if not proveedores:
         admin = os.getenv("ADMIN_WHATSAPP", "").strip()
@@ -3202,6 +3206,48 @@ def _seg_texto_opciones(num_cliente: str) -> str:
     return "\n".join(lineas)
 
 
+def _seg_actualizar_servicio(sid: str, numero_cliente: str, *, cotizacion: dict | None = None,
+                             estado: str | None = None, proveedor: str | None = None, monto=None):
+    """Actualiza el registro de Seguridad en servicios.json: agrega una cotización
+    y/o cambia estado, proveedor y monto. Permite seguimiento completo en el dashboard."""
+    try:
+        if not os.path.exists(SERVICIOS_FILE):
+            return
+        with open(SERVICIOS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f) or []
+        rec = None
+        if sid:
+            rec = next((r for r in data if r.get("id") == sid), None)
+        if rec is None:
+            for r in reversed(data):
+                if r.get("telefono") == numero_cliente and r.get("tipo") == "SEGURIDAD":
+                    rec = r; break
+        if rec is None:
+            return
+        if cotizacion is not None:
+            cots = rec.setdefault("cotizaciones", [])
+            ex = next((c for c in cots if c.get("prov_num") == cotizacion.get("prov_num")), None)
+            if ex:
+                ex.update(cotizacion)
+            else:
+                cots.append(cotizacion)
+        if estado is not None:
+            rec["estado"] = estado
+        if proveedor is not None:
+            rec["proveedor"] = proveedor
+        if monto is not None:
+            try:
+                rec["monto"] = float(str(monto).replace("S/", "").replace("s/", "").strip() or 0)
+            except Exception:
+                rec["monto"] = 0
+        tmp = SERVICIOS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, SERVICIOS_FILE)
+    except Exception as e:
+        print(f"[SERVICIO ERROR] actualizar seg: {e}", flush=True)
+
+
 def _enviar_correo_sync(asunto: str, cuerpo_html: str, cuerpo_texto: str):
     """Envía un correo vía SMTP (Gmail por defecto). Lee credenciales de env.
     Variables: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_TO (destino).
@@ -3496,6 +3542,9 @@ async def procesar(numero: str, tipo: str, contenido: dict):
 
             datos_cli = sesiones.get(num_cliente, {}).get("datos", solicitudes_seg_pendientes.get(num_cliente, {}))
             sesiones[num_cliente] = {"estado": S_SEG_ELEGIR_COT, "datos": datos_cli}
+            _seg_actualizar_servicio(datos_cli.get("id_servicio_seg", ""), num_cliente,
+                cotizacion={"prov_num": numero, "prov_negocio": prov_negocio,
+                            "prov_nombre": prov_nombre, "monto": monto_str, "descripcion": descripcion})
 
             await enviar_mensaje(numero,
                 "✅ Cotización registrada. El cliente la verá y podrá elegir. ¡Gracias!")
@@ -4461,6 +4510,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                     "Gracias por cotizar. En esta ocasión el cliente eligió otra opción. "
                     "Te avisaremos en la próxima solicitud 🦅")
         # Registrar en el dashboard (Sheets)
+        _seg_actualizar_servicio(datos.get("id_servicio_seg", ""), numero,
+            estado="atendido", proveedor=elegida.get("prov_negocio", ""), monto=elegida.get("monto", ""))
         asyncio.create_task(sheets_evento("upsert_servicio", {
             "FECHA":        datetime.now().strftime("%d/%m/%Y %H:%M"),
             "ID_SERVICIO":  generar_id_servicio(numero, "SEG"),
