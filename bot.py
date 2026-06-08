@@ -95,6 +95,7 @@ async def limpiar_sesiones():
 @app.on_event("startup")
 async def startup():
     cargar_estado()  # recuperar sesiones que sobrevivieron al reinicio
+    asegurar_seed_seg()  # migrar/garantizar proveedores de Seguridad aprobados
     print(f"[BOT] Estado persistente: {len(sesiones)} sesiones activas recuperadas", flush=True)
     # Renovador desactivado: WHATSAPP_TOKEN debe venir desde Render Environment.
     # asyncio.create_task(renovar_token())
@@ -170,7 +171,8 @@ S_SEG_UBICACION      = "SEG_UBICACION"     # Dirección
 S_SEG_URGENCIA       = "SEG_URGENCIA"      # Urgente o programado
 S_SEG_PROGRAMAR      = "SEG_PROGRAMAR"     # Fecha y hora si programado
 S_SEG_ESPERA_COT     = "SEG_ESPERA_COT"    # Esperando cotización de Marcos
-S_SEG_CONFIRMAR_COT  = "SEG_CONFIRMAR_COT" # Cliente acepta o rechaza cotización
+S_SEG_CONFIRMAR_COT  = "SEG_CONFIRMAR_COT" # (legacy) aceptar/rechazar 1 cotización
+S_SEG_ELEGIR_COT     = "SEG_ELEGIR_COT"    # Cliente elige entre varias cotizaciones
 S_SEG_CALIFICAR      = "SEG_CALIFICAR"     # Calificación post servicio
 
 # Educación
@@ -256,6 +258,7 @@ ESTADO_ANTERIOR = {
     S_SEG_PROGRAMAR:        S_SEG_URGENCIA,
     S_SEG_ESPERA_COT:       S_SEG_URGENCIA,
     S_SEG_CONFIRMAR_COT:    S_SEG_ESPERA_COT,
+    S_SEG_ELEGIR_COT:       S_SEG_ESPERA_COT,
     # Educación
     S_EDU_PARA_QUIEN:       S_MENU,
     S_EDU_NOMBRE:           S_EDU_PARA_QUIEN,
@@ -1026,8 +1029,8 @@ def generar_id_servicio(numero_cliente: str, tipo: str) -> str:
 
 
 async def _notificar_proveedor_seg(numero_cliente: str, datos: dict):
-    """Notifica a Marcos Espinoza con los detalles de la solicitud de seg & saneamiento."""
-    num_marcos = list(PROVEEDORES_SEG.keys())[0]
+    """Notifica la solicitud a TODOS los proveedores de Seguridad aprobados."""
+    proveedores = proveedores_seg_aprobados()
     nombre = datos.get("nombre", "Cliente")
     tel    = telefono_sin_51(numero_cliente)
     subcat = datos.get("seg_subcategoria", "")
@@ -1037,6 +1040,19 @@ async def _notificar_proveedor_seg(numero_cliente: str, datos: dict):
     fecha  = datos.get("seg_fecha_programada", "")
 
     solicitudes_seg_pendientes[numero_cliente] = datos.copy()
+    cotizaciones_seg_pendientes[numero_cliente] = []  # lista de cotizaciones recibidas
+
+    if not proveedores:
+        admin = os.getenv("ADMIN_WHATSAPP", "").strip()
+        if admin:
+            await enviar_mensaje(admin,
+                f"⚠️ Solicitud de Seguridad sin proveedores aprobados.\n"
+                f"Cliente: {nombre} (+{tel}) — {subcat}: {desc} — {ubic}")
+        await enviar_mensaje(numero_cliente,
+            "✅ *¡Solicitud registrada!*\n\n"
+            "Estamos sumando especialistas a la red. Nuestro equipo te contactará a la brevedad.\n\n"
+            "Escribe *menu* si necesitas otra cosa 🦅")
+        return
 
     msg = (
         f"🦅 *El Cuervo — Nueva Solicitud*\n\n"
@@ -1054,18 +1070,19 @@ async def _notificar_proveedor_seg(numero_cliente: str, datos: dict):
         f"*COTIZO {tel} [monto] [descripción breve]*\n\n"
         f"Ejemplo: COTIZO {tel} 150 recarga 3 extintores PQS 6kg"
     )
-    await enviar_mensaje(num_marcos, msg)
-    # Notificar al cliente que se envió
+    await asyncio.gather(*[
+        enviar_mensaje(p.get("telefono", ""), msg) for p in proveedores if p.get("telefono")
+    ], return_exceptions=True)
+    print(f"[SEG] solicitud enviada a {len(proveedores)} proveedor(es) de seguridad", flush=True)
+
     await enviar_mensaje(numero_cliente,
         f"✅ *¡Solicitud enviada!*\n\n"
         f"🛡️ *{subcat}*\n"
         f"📍 {ubic}\n\n"
-        f"Nuestro especialista *Marcos Espinoza / SASI SAC* revisará tu solicitud "
-        f"y te enviará una cotización en breve.\n\n"
-        f"⏳ Tiempo estimado de respuesta: *15–30 minutos*\n\n"
+        f"La enviamos a *{len(proveedores)} especialista(s)* de la red. "
+        f"Te llegarán sus cotizaciones y *tú eliges* la que prefieras.\n\n"
+        f"⏳ Tiempo estimado: *15–30 minutos*\n\n"
         f"Escribe *menu* si necesitas otra cosa 🦅")
-
-
 
 
 def armar_sheets_servicio(numero_cliente: str, tipo: str, d: dict, estado: str, conductor: dict | None = None) -> dict:
@@ -2111,9 +2128,7 @@ async def enrutar_categoria(numero: str, sesion: dict, categoria: str, prefijo: 
         await enviar_mensaje(numero, prefijo + MSG_GASTRO_PROXIMAMENTE)
         return True
     if categoria == "SEGURIDAD":
-        if not dentro_horario_seg():
-            await enviar_mensaje(numero, MSG_SEG_FUERA_HORARIO)
-            return True
+        # SASI SAC recibe solicitudes 24/7 (sin restricción de horario)
         sesion["estado"] = S_SEG_SUBCATEGORIA
         await enviar_mensaje(numero, prefijo + MSG_SEG_SUBMENU)
         return True
@@ -3123,6 +3138,70 @@ def cargar_proveedores_aprobados(filtro_tipo: str = "") -> list:
         return []
 
 
+def proveedores_seg_aprobados() -> list:
+    """Proveedores de Seguridad & Saneamiento APROBADOS (desde proveedores.json)."""
+    return cargar_proveedores_aprobados("seguridad")
+
+
+def es_proveedor_seg(numero: str) -> bool:
+    """True si el número es un proveedor de Seguridad aprobado."""
+    return any(p.get("telefono") == numero for p in proveedores_seg_aprobados())
+
+
+# Proveedores "semilla" de Seguridad que se migran a proveedores.json al iniciar.
+SEG_SEED = [
+    {
+        "id": "PV-SASI0001",
+        "tipo": "Seguridad y Defensa Civil",
+        "nombre": "Marcos Espinoza",
+        "telefono": "51960459741",
+        "negocio": "SASI SAC",
+        "direccion": "",
+        "placa": "",
+        "detalle": "Extintores, señalización, fumigación, capacitación y defensa civil. Cobertura: Barranca, distritos y Huacho.",
+        "fecha": "seed",
+        "estado": "APROBADO",
+    },
+]
+
+
+def asegurar_seed_seg():
+    """Inserta los proveedores semilla de Seguridad en proveedores.json si no existen (idempotente)."""
+    try:
+        data = []
+        if os.path.exists(PROVEEDORES_FILE):
+            with open(PROVEEDORES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f) or []
+        nums = {r.get("telefono") for r in data}
+        nuevos = 0
+        for s in SEG_SEED:
+            if s["telefono"] not in nums:
+                data.append(dict(s)); nuevos += 1
+        if nuevos:
+            tmp = PROVEEDORES_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, PROVEEDORES_FILE)
+            print(f"[SEED] {nuevos} proveedor(es) de Seguridad migrado(s) a proveedores.json", flush=True)
+    except Exception as e:
+        print(f"[SEED ERROR] {e}", flush=True)
+
+
+def _seg_texto_opciones(num_cliente: str) -> str:
+    """Arma el mensaje con la lista de cotizaciones para que el cliente elija."""
+    lista = cotizaciones_seg_pendientes.get(num_cliente, [])
+    datos = sesiones.get(num_cliente, {}).get("datos", solicitudes_seg_pendientes.get(num_cliente, {}))
+    subcat = datos.get("seg_subcategoria", "")
+    lineas = [f"💰 *Cotizaciones recibidas — {subcat}*", ""]
+    for i, c in enumerate(lista, 1):
+        extra = f" — {c['descripcion']}" if c.get("descripcion") else ""
+        lineas.append(f"{i}\u20e3 *{c.get('prov_negocio','')}* · S/{c.get('monto','')}{extra}")
+    lineas.append("")
+    lineas.append("Responde el *número* de la cotización que eliges.")
+    lineas.append("_(Puedes esperar más cotizaciones antes de decidir.)_")
+    return "\n".join(lineas)
+
+
 def _enviar_correo_sync(asunto: str, cuerpo_html: str, cuerpo_texto: str):
     """Envía un correo vía SMTP (Gmail por defecto). Lee credenciales de env.
     Variables: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_TO (destino).
@@ -3387,15 +3466,17 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         return
 
     # ── Proveedor Seguridad responde COTIZO ──────────────────────────────────
-    if numero in PROVEEDORES_SEG and texto.upper().startswith("COTIZO"):
+    if es_proveedor_seg(numero) and texto.upper().startswith("COTIZO"):
         partes = texto.strip().split(maxsplit=3)
         # Formato: COTIZO [tel_cliente] [monto] [descripcion]
         if len(partes) >= 3:
-            tel_raw    = partes[1].replace("+51","").replace("51","",1) if partes[1].startswith("+51") or (partes[1].startswith("51") and len(partes[1])==11) else partes[1]
+            tel_raw     = partes[1].replace("+51", "").replace("51", "", 1) if partes[1].startswith("+51") or (partes[1].startswith("51") and len(partes[1]) == 11) else partes[1]
             num_cliente = tel_raw if tel_raw.startswith("51") else f"51{tel_raw}"
-            monto_str  = partes[2]
+            monto_str   = partes[2]
             descripcion = partes[3] if len(partes) >= 4 else ""
-            proveedor  = PROVEEDORES_SEG[numero]
+            prov = next((p for p in proveedores_seg_aprobados() if p.get("telefono") == numero), {})
+            prov_nombre  = prov.get("nombre", "Especialista")
+            prov_negocio = prov.get("negocio", "") or prov_nombre
 
             if num_cliente not in solicitudes_seg_pendientes:
                 await enviar_mensaje(numero,
@@ -3403,26 +3484,22 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                     f"Verifica el número e intenta de nuevo.")
                 return
 
-            cotizaciones_seg_pendientes[num_cliente] = {
-                "monto":       monto_str,
-                "descripcion": descripcion,
-                "proveedor":   proveedor["nombre"],
-            }
-            sesiones[num_cliente] = {
-                "estado": S_SEG_CONFIRMAR_COT,
-                "datos":  sesiones.get(num_cliente, {}).get("datos", solicitudes_seg_pendientes.get(num_cliente, {}))
-            }
+            lista = cotizaciones_seg_pendientes.setdefault(num_cliente, [])
+            existente = next((c for c in lista if c.get("prov_num") == numero), None)
+            if existente:
+                existente.update({"monto": monto_str, "descripcion": descripcion})
+            else:
+                lista.append({
+                    "prov_num": numero, "prov_nombre": prov_nombre,
+                    "prov_negocio": prov_negocio, "monto": monto_str, "descripcion": descripcion,
+                })
+
+            datos_cli = sesiones.get(num_cliente, {}).get("datos", solicitudes_seg_pendientes.get(num_cliente, {}))
+            sesiones[num_cliente] = {"estado": S_SEG_ELEGIR_COT, "datos": datos_cli}
+
             await enviar_mensaje(numero,
-                f"✅ Cotización enviada al cliente. Esperando respuesta.")
-            await enviar_mensaje(num_cliente,
-                f"💰 *Cotización recibida — {proveedor['negocio']}*\n\n"
-                f"🛡️ Servicio: {sesiones[num_cliente]['datos'].get('seg_subcategoria','')}\n"
-                f"💵 Monto: *S/{monto_str}*\n"
-                f"{'📝 ' + descripcion + chr(10) if descripcion else ''}\n"
-                f"━━━━━━━━━━━━━━━━\n\n"
-                f"¿Deseas aceptar esta cotización?\n\n"
-                f"1️⃣ ✅ Aceptar\n"
-                f"2️⃣ ❌ Rechazar")
+                "✅ Cotización registrada. El cliente la verá y podrá elegir. ¡Gracias!")
+            await enviar_mensaje(num_cliente, _seg_texto_opciones(num_cliente))
         else:
             await enviar_mensaje(numero,
                 "⚠️ Formato incorrecto. Usa:\n"
@@ -4349,65 +4426,63 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             "Te notificaremos en cuanto tengamos una respuesta.\n\n"
             "Escribe *menu* si deseas hacer otra consulta." + NAV)
 
-    elif estado == S_SEG_CONFIRMAR_COT:
-        if texto == "1":
-            # Cliente acepta cotización
-            cot = cotizaciones_seg_pendientes.pop(numero, {})
-            datos["seg_cotizacion_aceptada"] = cot.get("monto", "")
-            datos["seg_estado"] = "CONFIRMADO"
-            # Notificar a Marcos que fue aceptado
-            num_marcos = list(PROVEEDORES_SEG.keys())[0]
-            nombre_cliente = datos.get("nombre", "Cliente")
-            tel_cliente = telefono_sin_51(numero)
-            await enviar_mensaje(num_marcos,
-                f"✅ *¡Cotización ACEPTADA!*\n\n"
-                f"👤 Cliente: {nombre_cliente}\n"
-                f"📱 Teléfono: +{tel_cliente}\n"
-                f"🛡️ Servicio: {datos.get('seg_subcategoria','')}\n"
-                f"📍 Dirección: {datos.get('seg_ubicacion','')}\n"
-                f"💰 Monto aceptado: S/{cot.get('monto','')}\n"
-                f"⏰ Urgencia: {datos.get('seg_urgencia','')}\n"
-                f"{'📅 Fecha: ' + datos.get('seg_fecha_programada','') if datos.get('seg_fecha_programada') else ''}\n\n"
-                f"Coordina con el cliente para confirmar horario exacto.")
-            asyncio.create_task(sheets_evento("upsert_servicio", {
-                "FECHA":       datetime.now().strftime("%d/%m/%Y %H:%M"),
-                "ID_SERVICIO": generar_id_servicio(numero, "SEG"),
-                "CATEGORIA":   "SEGURIDAD",
-                "SUBCATEGORIA": datos.get("seg_subcategoria",""),
-                "CLIENTE":     datos.get("nombre",""),
-                "TELEFONO":    telefono_sin_51(numero),
-                "DESCRIPCION": datos.get("seg_descripcion",""),
-                "UBICACION":   datos.get("seg_ubicacion",""),
-                "URGENCIA":    datos.get("seg_urgencia",""),
-                "PROVEEDOR":   "Marcos Espinoza / SASI SAC",
-                "MONTO":       cot.get("monto",""),
-                "ESTADO":      "CONFIRMADO",
-            }))
-            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+    elif estado == S_SEG_ELEGIR_COT:
+        lista = cotizaciones_seg_pendientes.get(numero, [])
+        if not lista:
             await enviar_mensaje(numero,
-                f"✅ *¡Servicio confirmado!*\n\n"
-                f"🛡️ *{datos.get('seg_subcategoria','')}*\n"
-                f"👷 Especialista: *Marcos Espinoza / SASI SAC*\n"
-                f"💰 Monto: *S/{cot.get('monto','')}*\n\n"
-                f"Marcos coordinará contigo los detalles finales.\n\n"
-                f"Escribe *menu* para volver al inicio 🦅")
-        elif texto == "2":
-            # Cliente rechaza cotización
-            cot = cotizaciones_seg_pendientes.pop(numero, {})
-            num_marcos = list(PROVEEDORES_SEG.keys())[0]
-            await enviar_mensaje(num_marcos,
-                f"❌ *Cotización rechazada*\n"
-                f"El cliente {datos.get('nombre','N/A')} no aceptó la cotización de S/{cot.get('monto','')}.")
-            sesiones[numero] = {"estado": S_MENU, "datos": {}}
-            await enviar_mensaje(numero,
-                "Entendido. Hemos notificado al especialista.\n\n"
-                "Si cambias de opinión o necesitas otro servicio, escribe *menu* 🦅")
-        else:
-            cot = cotizaciones_seg_pendientes.get(numero, {})
-            await enviar_mensaje(numero,
-                f"Por favor responde:\n\n"
-                f"1️⃣ Aceptar cotización (S/{cot.get('monto','')})\n"
-                f"2️⃣ Rechazar cotización")
+                "⏳ Aún no hay cotizaciones. Te avisaremos en cuanto lleguen." + NAV)
+            return
+        if not texto.isdigit() or not (1 <= int(texto) <= len(lista)):
+            await enviar_mensaje(numero, _seg_texto_opciones(numero))
+            return
+        elegida = lista[int(texto) - 1]
+        cotizaciones_seg_pendientes.pop(numero, None)
+        solicitudes_seg_pendientes.pop(numero, None)
+        datos["seg_cotizacion_aceptada"] = elegida.get("monto", "")
+        datos["seg_proveedor"] = elegida.get("prov_negocio", "")
+        datos["seg_estado"] = "CONFIRMADO"
+        nombre_cliente = datos.get("nombre", "Cliente")
+        tel_cliente = telefono_sin_51(numero)
+        # Avisar al proveedor elegido
+        await enviar_mensaje(elegida.get("prov_num", ""),
+            f"✅ *¡Te eligieron!*\n\n"
+            f"👤 Cliente: {nombre_cliente}\n"
+            f"📱 Teléfono: +{tel_cliente}\n"
+            f"🛡️ Servicio: {datos.get('seg_subcategoria','')}\n"
+            f"📍 Dirección: {datos.get('seg_ubicacion','')}\n"
+            f"💰 Monto: S/{elegida.get('monto','')}\n"
+            f"⏰ Urgencia: {datos.get('seg_urgencia','')}\n"
+            f"{'📅 Fecha: ' + datos.get('seg_fecha_programada','') if datos.get('seg_fecha_programada') else ''}\n\n"
+            f"Coordina directamente con el cliente. ¡Éxitos! 🦅")
+        # Avisar a los demás proveedores
+        for c in lista:
+            if c.get("prov_num") and c.get("prov_num") != elegida.get("prov_num"):
+                await enviar_mensaje(c["prov_num"],
+                    "Gracias por cotizar. En esta ocasión el cliente eligió otra opción. "
+                    "Te avisaremos en la próxima solicitud 🦅")
+        # Registrar en el dashboard (Sheets)
+        asyncio.create_task(sheets_evento("upsert_servicio", {
+            "FECHA":        datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "ID_SERVICIO":  generar_id_servicio(numero, "SEG"),
+            "CATEGORIA":    "SEGURIDAD",
+            "SUBCATEGORIA": datos.get("seg_subcategoria", ""),
+            "CLIENTE":      datos.get("nombre", ""),
+            "TELEFONO":     telefono_sin_51(numero),
+            "DESCRIPCION":  datos.get("seg_descripcion", ""),
+            "UBICACION":    datos.get("seg_ubicacion", ""),
+            "URGENCIA":     datos.get("seg_urgencia", ""),
+            "PROVEEDOR":    elegida.get("prov_negocio", ""),
+            "MONTO":        elegida.get("monto", ""),
+            "ESTADO":       "CONFIRMADO",
+        }))
+        sesiones[numero] = {"estado": S_MENU, "datos": {}}
+        await enviar_mensaje(numero,
+            f"✅ *¡Servicio confirmado!*\n\n"
+            f"🛡️ *{datos.get('seg_subcategoria','')}*\n"
+            f"👷 Especialista: *{elegida.get('prov_negocio','')}*\n"
+            f"💰 Monto: *S/{elegida.get('monto','')}*\n\n"
+            f"El especialista coordinará contigo los detalles finales.\n\n"
+            f"Escribe *menu* para volver al inicio 🦅")
 
     # ══ EDUCACIÓN ══════════════════════════════════════════════════════════════
     elif estado == S_EDU_PARA_QUIEN:
