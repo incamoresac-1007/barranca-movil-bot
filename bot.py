@@ -6361,7 +6361,17 @@ def _pagina_resultado(titulo, mensaje, color):
         <h1 style="color:#e8b04b;margin:0 0 8px;font-size:24px">{titulo}</h1>
         <p style="color:#cfd0db;font-size:16px;line-height:1.5">{mensaje}</p>
         <p style="color:#6a6b76;font-size:13px;margin-top:22px">El Cuervo 🦅 · Panel de validación</p>
-      </div></body></html>""")
+        <p id="cd" style="color:#6a6b76;font-size:12px;margin-top:6px">Esta ventana se cerrará en 3 s…</p>
+      </div>
+      <script>
+        var s=3, el=document.getElementById('cd');
+        var t=setInterval(function(){{
+          s--;
+          if(s>0){{ el.textContent='Esta ventana se cerrará en '+s+' s…'; }}
+          else {{ clearInterval(t); window.close(); setTimeout(function(){{ el.textContent='Ya puedes cerrar esta pestaña.'; }},400); }}
+        }},1000);
+      </script>
+    </body></html>""")
 
 
 @app.get("/proveedor/validar")
@@ -6530,6 +6540,7 @@ DASHBOARD_HTML = r'''<!DOCTYPE html>
   .side a:hover{background:#191a22;color:#fff;}
   .side a.act{background:linear-gradient(90deg,#1d2740,#161824);color:#fff;}
   .side a .ic{width:18px;text-align:center;opacity:.9;}
+  .side a .rec{margin-left:auto;background:#2a1e12;color:#e8b04b;border:1px solid #5a4423;font-size:9px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:20px;text-transform:uppercase;}
   /* Main */
   .main{flex:1;padding:24px 28px;overflow:auto;}
   .head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:22px;}
@@ -6578,11 +6589,11 @@ DASHBOARD_HTML = r'''<!DOCTYPE html>
     <div class="logo"><div class="em">&#129413;</div><div><b>EL CUERVO</b><small>RED DE SERVICIOS</small></div></div>
     <div class="sec">Módulo de análisis</div>
     <a class="act"><span class="ic">&#9632;</span> Resumen general</a>
-    <a><span class="ic">&#128661;</span> Transporte</a>
-    <a><span class="ic">&#128218;</span> Educación</a>
-    <a><span class="ic">&#128737;</span> Seguridad</a>
-    <a><span class="ic">&#128295;</span> Servicios Técnicos</a>
-    <a><span class="ic">&#127869;</span> Gastronomía</a>
+    <a><span class="ic">&#128661;</span> Transporte<span class="rec">Reclutando</span></a>
+    <a><span class="ic">&#128218;</span> Educación<span class="rec">Reclutando</span></a>
+    <a><span class="ic">&#128737;</span> Seguridad<span class="rec">Reclutando</span></a>
+    <a><span class="ic">&#128295;</span> Servicios Técnicos<span class="rec">Reclutando</span></a>
+    <a><span class="ic">&#127869;</span> Gastronomía<span class="rec">Reclutando</span></a>
     <div class="sec">Red</div>
     <a><span class="ic">&#129309;</span> Proveedores</a>
     <a><span class="ic">&#127903;</span> Tickets</a>
@@ -6643,6 +6654,7 @@ function render(d){
   html += `<div class="row r2">
     <div class="card"><h3>Proveedores registrados</h3><div class="sub">${k.proveedores_pendientes} por validar</div><div id="prov"></div></div>
     <div class="card"><h3>Conductores</h3><div class="sub">${k.conductores_activos} activos</div><div id="cond"></div></div>
+    <div class="card"><h3>Servicios Técnicos</h3><div class="sub">Técnicos registrados</div><div id="tec"></div></div>
   </div>`;
 
   $('#root').innerHTML = html;
@@ -6672,6 +6684,14 @@ function render(d){
   d.conductores.forEach(c=>{ let e=c.en_viaje?'<span class="badge bv">En viaje</span>':(c.activo?'<span class="badge bo">Activo</span>':'<span class="badge" style="background:#eef0f4;color:#9a9db0">Pausado</span>');
     cd+=`<tr><td>${c.nombre}</td><td>${c.placa}</td><td>${e}</td></tr>`; });
   cd+='</table>'; $('#cond').innerHTML=cd;
+
+  // Servicios Técnicos (proveedores tipo técnico / especialista)
+  const tecs = d.proveedores.filter(p=>/t[eé]cnico|especialista/i.test(p.tipo||''));
+  let tt = tecs.length? '<table><tr><th>Nombre</th><th>Oficio</th><th>Estado</th></tr>' : '';
+  tecs.forEach(p=>{ let b; if(p.estado==='APROBADO'){b='<span class="badge bo">Activo</span>';} else if(p.estado==='EN_VALIDACION'){b='<span class="badge bv">En validación</span>';} else if(p.estado==='RECHAZADO'){b='<span class="badge bp">Rechazado</span>';} else {b='<span class="badge bp">Por validar</span>';}
+    tt+=`<tr><td>${p.nombre||'—'}</td><td>${(p.detalle||p.oficio||'—')}</td><td>${b}</td></tr>`; });
+  tt += tecs.length? '</table>' : '<p class="empty">Aún sin técnicos registrados. Invítalos a unirse 🦅</p>';
+  $('#tec').innerHTML = tt;
 
   // Gráficos al final, protegidos (si el CDN de Chart.js no carga, las tablas igual se ven)
   if(typeof Chart==='undefined'){ return; }
