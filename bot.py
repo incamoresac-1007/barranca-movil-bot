@@ -6581,6 +6581,7 @@ DASHBOARD_HTML = r'''<!DOCTYPE html>
     <a><span class="ic">&#128661;</span> Transporte</a>
     <a><span class="ic">&#128218;</span> Educación</a>
     <a><span class="ic">&#128737;</span> Seguridad</a>
+    <a><span class="ic">&#128295;</span> Servicios Técnicos</a>
     <a><span class="ic">&#127869;</span> Gastronomía</a>
     <div class="sec">Red</div>
     <a><span class="ic">&#129309;</span> Proveedores</a>
