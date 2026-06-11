@@ -6750,11 +6750,25 @@ async def api_dashboard(clave: str = ""):
         t = p.get("tipo", "Otro")
         prov_por_tipo[t] = prov_por_tipo.get(t, 0) + 1
 
-    # Conductores
+    # Conductores — estado REAL desde Google Sheets (misma fuente que el reparto y tu hoja de control)
+    activos_sheet = set()
+    sheet_ok = bool(os.getenv("SHEETS_WEBHOOK_URL", "").strip())
+    if sheet_ok:
+        try:
+            for c in (await obtener_conductores_activos_desde_sheets()):
+                tel = str(c.get("telefono", "")).strip().replace("+", "")
+                if tel and not tel.startswith("51"):
+                    tel = "51" + tel
+                if tel:
+                    activos_sheet.add(tel)
+        except Exception as e:
+            print(f"[DASHBOARD] no se pudo leer conductores de Sheets: {e}", flush=True)
+            sheet_ok = False
+
     conductores = []
     activos = 0
     for num, info in CONDUCTORES.items():
-        estado_act = conductores_estado.get(num, False)
+        estado_act = (num in activos_sheet) if sheet_ok else conductores_estado.get(num, False)
         if estado_act:
             activos += 1
         conductores.append({
