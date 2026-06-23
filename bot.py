@@ -3671,7 +3671,7 @@ def _cal_admin():
     return os.getenv("ADMIN_WHATSAPP", "").strip() or (OPERADOR_WA or "")
 
 def _cal_pregunta_espesor():
-    return "¿Qué espesor de calamina TR4 necesitas?\n- 0.30 mm (S/ 23 / m²)\n- 0.40 mm (S/ 26 / m²)"
+    return "¿Qué espesor de calamina TR4 necesitas?\n- 0.30 mm\n- 0.40 mm"
 
 async def iniciar_calaminas(numero, sesion):
     sesion["estado"] = S_CAL_TIPO
@@ -3679,14 +3679,30 @@ async def iniciar_calaminas(numero, sesion):
     await enviar_mensaje(numero,
         "🔧 Te ayudo con eso. Este servicio lo ejecuta *INCAMORE S.A.C.*, "
         "nuestra empresa de estructuras metálicas y caldería.\n\n"
-        "Para empezar, la cotización es para:\n"
-        "1️⃣ Consumidor final / negocio pequeño (boleta)\n"
-        "2️⃣ Empresa con RUC (factura)\n\n"
+        "Para empezar, ¿tu comprobante será *boleta* o *factura*?\n"
+        "1️⃣ Boleta\n"
+        "2️⃣ Factura (necesito tu RUC)\n\n"
         "_(puedes escribir *atrás* para corregir o *cancelar* para salir)_")
+
+CAL_PALABRAS_PRECIO = ("cuanto", "cuánto", "precio", "precios", "cuesta", "cuestan",
+                       "vale", "valen", "a como", "a cómo", "a cuanto", "a cuánto",
+                       "costo", "tarifa", "el metro", "por metro", "x metro", "metro cuadrado", "m2")
+
+def _cal_es_consulta_precio(low: str) -> bool:
+    return any(p in low for p in CAL_PALABRAS_PRECIO)
+
+def _cal_texto_precios() -> str:
+    return ("💰 *Precios referenciales (incluyen IGV):*\n"
+            "• Calamina TR4 0.30 mm — S/ 23 el m²\n"
+            "• Calamina TR4 0.40 mm — S/ 26 el m²\n"
+            "• Cumbreras — S/ 20 el metro\n"
+            "• Canaletas — S/ 20 el metro\n"
+            "• Autoperforantes — S/ 15 el ciento / S/ 100 el millar\n\n"
+            "_El precio final según tu medida sale en la cotización formal._")
 
 def _cal_pregunta_de(estado, d):
     if estado == S_CAL_TIPO:
-        return ("La cotización es para:\n1️⃣ Consumidor final / negocio pequeño (boleta)\n2️⃣ Empresa con RUC (factura)")
+        return ("¿Tu comprobante será *boleta* o *factura*?\n1️⃣ Boleta\n2️⃣ Factura (necesito tu RUC)")
     if estado == S_CAL_RUC:
         return "Pásame el *RUC* (11 dígitos) y la *razón social*.\nEj: 20123456789 MI EMPRESA SAC"
     if estado == S_CAL_ESPESOR:
@@ -3737,6 +3753,15 @@ async def manejar_calaminas(numero, sesion, texto):
             await enviar_mensaje(numero, "↩️ Volvamos un paso.\n\n" + _cal_pregunta_de(prev, d))
         return
 
+    # ── Consulta de precio en cualquier momento: responde y sigue donde estaba ──
+    if _cal_es_consulta_precio(low) and estado in (S_CAL_TIPO, S_CAL_ESPESOR, S_CAL_COLOR,
+                                                    S_CAL_LARGO, S_CAL_CANTIDAD, S_CAL_ACCESORIOS):
+        await enviar_mensaje(numero, _cal_texto_precios())
+        q = _cal_pregunta_de(estado, d)
+        if q:
+            await enviar_mensaje(numero, "Sigamos 👇\n\n" + q)
+        return
+
     if estado == S_CAL_TIPO:
         if "2" in t or "factura" in t.lower() or "empresa" in t.lower():
             d["tipo"] = "factura"; sesion["estado"] = S_CAL_RUC
@@ -3755,11 +3780,14 @@ async def manejar_calaminas(numero, sesion, texto):
         await enviar_mensaje(numero, _cal_pregunta_espesor()); return
 
     if estado == S_CAL_ESPESOR:
-        tt = t.replace(".", "")
-        if "0.30" in t or "030" in tt or t in ("30", "0.3"): d["espesor"] = "0.30"
-        elif "0.40" in t or "040" in tt or t in ("40", "0.4"): d["espesor"] = "0.40"
+        tt = t.replace(".", "").replace(",", "")
+        if "0.30" in t or "0,30" in t or "030" in tt or t in ("30", "0.3", "0,3") or "delgad" in low or "fina" in low:
+            d["espesor"] = "0.30"
+        elif "0.40" in t or "0,40" in t or "040" in tt or t in ("40", "0.4", "0,4") or "grues" in low:
+            d["espesor"] = "0.40"
         else:
-            await enviar_mensaje(numero, _cal_pregunta_espesor()); return
+            await enviar_mensaje(numero,
+                "No te entendí el espesor 🙏\nEscríbelo así:\n- *0.30* (más delgada)\n- *0.40* (más gruesa)"); return
         sesion["estado"] = S_CAL_COLOR
         await enviar_mensaje(numero, "Color de la calamina:\n- " + "\n- ".join(c.capitalize() for c in CAL_COLORES)); return
 
