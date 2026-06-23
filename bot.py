@@ -650,7 +650,8 @@ _Red inteligente de servicios locales en Barranca_
 3️⃣ 🛡️ Seguridad & Saneamiento
 4️⃣ 📚 Educación
 5️⃣ 🔧 Servicios Técnicos
-6️⃣ 🤝 Únete / Trabaja con nosotros
+6️⃣ 🏗️ Estructuras & Calaminas (INCAMORE)
+7️⃣ 🤝 Únete / Trabaja con nosotros
 0️⃣ Salir
 
 O escribe tu consulta libremente 💬"""
@@ -3627,31 +3628,33 @@ def cal_generar_pdf(d: dict) -> str:
     pdf.set_xy(M,y); pdf.set_font("Helvetica","B",9); pdf.set_text_color(*NEGRO); pdf.cell(100,5,"INCAMORE S.A.C",ln=1)
     pdf.set_x(M); pdf.set_font("Helvetica","I",8); pdf.set_text_color(*ROJO); pdf.cell(100,5,"Ingenieria a tu medida")
     pdf.set_xy(110,y+1); pdf.set_font("Helvetica","",8); pdf.set_text_color(*GRIS); pdf.cell(W-96,5,"Gracias por su preferencia",align="R")
-    ruta=os.path.join(_tmp.gettempdir(), f"Cotizacion_{d['folio']}.pdf"); pdf.output(ruta)
+    _cotdir=os.path.join(DATA_DIR,"cotizaciones"); os.makedirs(_cotdir,exist_ok=True)
+    ruta=os.path.join(_cotdir, f"{d['folio']}.pdf"); pdf.output(ruta)
     try: os.remove(logo)
     except Exception: pass
     return ruta
 
-async def cal_enviar_documento(to: str, ruta_pdf: str, caption: str = ""):
-    """Sube el PDF a WhatsApp y lo envía como documento."""
+def cal_base_url():
+    return (os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/") or "https://barranca-movil-bot.onrender.com")
+
+def cal_link_cotizacion(folio: str) -> str:
+    return f"{cal_base_url()}/cotizacion/{folio}"
+
+async def cal_enviar_documento(to: str, ruta_pdf: str, caption: str = "") -> bool:
+    """Envía el PDF como documento usando un ENLACE público servido por el propio bot.
+    Es más confiable que subir el archivo al API de Meta."""
+    folio = os.path.splitext(os.path.basename(ruta_pdf))[0]
+    link = cal_link_cotizacion(folio)
     try:
-        up = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/media"
-        headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+        url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+        headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+        payload = {"messaging_product": "whatsapp", "to": to, "type": "document",
+                   "document": {"link": link, "filename": f"{folio}.pdf", "caption": caption}}
         async with httpx.AsyncClient(timeout=30) as client:
-            with open(ruta_pdf, "rb") as fh:
-                files = {"file": (os.path.basename(ruta_pdf), fh, "application/pdf")}
-                data = {"messaging_product": "whatsapp", "type": "application/pdf"}
-                r = await client.post(up, headers=headers, data=data, files=files)
-            if r.status_code >= 400:
-                print(f"[CAL-DOC UPLOAD ERROR] {r.status_code} {r.text[:300]}", flush=True); return False
-            media_id = r.json().get("id")
-            url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
-            payload = {"messaging_product": "whatsapp", "to": to, "type": "document",
-                       "document": {"id": media_id, "filename": os.path.basename(ruta_pdf), "caption": caption}}
-            r2 = await client.post(url, headers={**headers, "Content-Type": "application/json"}, json=payload)
-            if r2.status_code >= 400:
-                print(f"[CAL-DOC SEND ERROR] {r2.status_code} {r2.text[:300]}", flush=True); return False
-        print(f"[CAL-DOC] enviado a {to}", flush=True); return True
+            r = await client.post(url, headers=headers, json=payload)
+        if r.status_code >= 400:
+            print(f"[CAL-DOC LINK ERROR] {r.status_code} {r.text[:300]}", flush=True); return False
+        print(f"[CAL-DOC] enviado (link) a {to}", flush=True); return True
     except Exception as e:
         print(f"[CAL-DOC EXCEPTION] {e}", flush=True); return False
 
@@ -3678,10 +3681,61 @@ async def iniciar_calaminas(numero, sesion):
         "nuestra empresa de estructuras metálicas y caldería.\n\n"
         "Para empezar, la cotización es para:\n"
         "1️⃣ Consumidor final / negocio pequeño (boleta)\n"
-        "2️⃣ Empresa con RUC (factura)")
+        "2️⃣ Empresa con RUC (factura)\n\n"
+        "_(puedes escribir *atrás* para corregir o *cancelar* para salir)_")
+
+def _cal_pregunta_de(estado, d):
+    if estado == S_CAL_TIPO:
+        return ("La cotización es para:\n1️⃣ Consumidor final / negocio pequeño (boleta)\n2️⃣ Empresa con RUC (factura)")
+    if estado == S_CAL_RUC:
+        return "Pásame el *RUC* (11 dígitos) y la *razón social*.\nEj: 20123456789 MI EMPRESA SAC"
+    if estado == S_CAL_ESPESOR:
+        return _cal_pregunta_espesor()
+    if estado == S_CAL_COLOR:
+        return "Color de la calamina:\n- " + "\n- ".join(c.capitalize() for c in CAL_COLORES)
+    if estado == S_CAL_LARGO:
+        return "¿Qué *largo* necesitas por calamina, en metros? (ej: 3.00)"
+    if estado == S_CAL_CANTIDAD:
+        return "¿Cuántas calaminas necesitas?"
+    if estado == S_CAL_ACCESORIOS:
+        return ("¿Necesitas accesorios? (elige varios o escribe *no*)\n"
+                "- Autoperforantes (ciento S/15 / millar S/100)\n"
+                "- Cumbreras (S/20 el metro)\n- Canaletas (S/20 el metro)")
+    if estado == S_CAL_NOMBRE:
+        return "¿A nombre de quién va la cotización?"
+    return ""
+
+def _cal_paso_anterior(estado, d):
+    if estado == S_CAL_TIPO:       return None
+    if estado == S_CAL_RUC:        return S_CAL_TIPO
+    if estado == S_CAL_ESPESOR:    return S_CAL_RUC if d.get("tipo") == "factura" else S_CAL_TIPO
+    if estado == S_CAL_COLOR:      return S_CAL_ESPESOR
+    if estado == S_CAL_LARGO:      return S_CAL_COLOR
+    if estado == S_CAL_CANTIDAD:   return S_CAL_LARGO
+    if estado == S_CAL_ACCESORIOS: return S_CAL_CANTIDAD
+    if estado == S_CAL_NOMBRE:     return S_CAL_ACCESORIOS
+    return None
 
 async def manejar_calaminas(numero, sesion, texto):
     estado = sesion["estado"]; d = sesion["datos"]; t = (texto or "").strip()
+    low = t.lower()
+
+    # ── Válvula de escape: cancelar / volver al menú ──
+    if low in ("cancelar", "cancela", "salir", "menu", "menú", "inicio", "empezar de nuevo"):
+        sesiones[numero] = {"estado": S_MENU, "datos": {}}
+        await enviar_mensaje(numero, "Listo, cancelé tu cotización. 👋\n\n" + MSG_BIENVENIDA)
+        return
+
+    # ── Retroceder un paso para corregir ──
+    if low in ("atras", "atrás", "volver", "regresar", "corregir", "anterior", "back"):
+        prev = _cal_paso_anterior(estado, d)
+        if prev is None:
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            await enviar_mensaje(numero, "No hay un paso anterior, te regreso al menú. 👋\n\n" + MSG_BIENVENIDA)
+        else:
+            sesion["estado"] = prev
+            await enviar_mensaje(numero, "↩️ Volvamos un paso.\n\n" + _cal_pregunta_de(prev, d))
+        return
 
     if estado == S_CAL_TIPO:
         if "2" in t or "factura" in t.lower() or "empresa" in t.lower():
@@ -3765,13 +3819,17 @@ async def manejar_calaminas(numero, sesion, texto):
                 await enviar_mensaje(adm, f"📞 PEDIDO DE ASESOR: {d.get('nombre','')} ({numero}) quiere confirmar antes del adelanto. Folio {d.get('folio','')}.")
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
             await enviar_mensaje(numero, "Perfecto 👍 Un asesor de INCAMORE te contacta en el día para confirmar los detalles. ¡Gracias!")
-        else:
+        elif low in ("no", "n", "no gracias", "datos", "pago", "yape", "deposito", "depósito"):
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
             await enviar_mensaje(numero,
                 f"Para iniciar tu pedido, el adelanto es del *75%* del total.\n"
                 f"📱 Yape: *{CAL_YAPE}* (INCAMORE S.A.C)\n"
                 f"Apenas confirmes el adelanto, la entrega del material es de *3 días hábiles*.\n\n"
                 f"*INCAMORE S.A.C — Ingeniería a tu medida.*")
+        else:
+            await enviar_mensaje(numero,
+                "¿Quieres que un *asesor* confirme contigo antes del adelanto?\n"
+                "Responde *SI* para que te contacte, o *NO* para recibir los datos de pago. 📱")
         return
 
 async def _cal_finalizar(numero, sesion):
@@ -3785,7 +3843,12 @@ async def _cal_finalizar(numero, sesion):
             f"🧾 *BORRADOR DE COTIZACIÓN para aprobar*\n"
             f"Cliente: {cot['cliente']} ({numero})\nTipo: {d['tipo'].upper()}\n"
             f"Total: {cot['total']}\n\nResponde: *APROBAR {numero}*  o  *EDITAR {numero}*")
-        await cal_enviar_documento(adm, ruta, caption=f"Borrador {cot['folio']}")
+        ok_doc = await cal_enviar_documento(adm, ruta, caption=f"Borrador {cot['folio']}")
+        if not ok_doc:
+            await enviar_mensaje(adm,
+                f"⚠️ No pude adjuntar el PDF automáticamente, pero aquí está el enlace de descarga:\n"
+                f"{cal_link_cotizacion(cot['folio'])}\n\n"
+                f"Resumen: {cot['cliente']} · {d['tipo'].upper()} · {cot['total']}")
     await cal_registrar_lead({"tipo_lead": "COTIZACION_CALAMINAS", "estado": "NUEVO",
         "folio": cot["folio"], "numero": numero, "cliente": cot["cliente"],
         "comprobante": d["tipo"], "ruc": d.get("ruc", ""), "total": cot["total_value"], "fecha": cot["fecha"]})
@@ -4470,6 +4533,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         elif texto == "5":
             await enrutar_categoria(numero, sesion, "SERVICIOS_TECNICOS")
         elif texto == "6":
+            await iniciar_calaminas(numero, sesion)
+        elif texto == "7":
             await iniciar_unete(numero, sesion)
         elif texto == "0":
             sesiones.pop(numero, None)
@@ -7304,6 +7369,18 @@ async def admin_test_solicitud(clave: str = "", to: str = ""):
         "to": to,
         "nota": "Revisa los logs de Render. [TEMPLATE]=aprobada y enviada. [TEMPLATE ERROR] status=400=falta aprobar en Meta."
     }
+
+
+@app.get("/cotizacion/{folio}")
+async def servir_cotizacion(folio: str):
+    from fastapi.responses import FileResponse
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z0-9\-]+", folio or ""):
+        raise HTTPException(status_code=400, detail="folio inválido")
+    ruta = os.path.join(DATA_DIR, "cotizaciones", f"{folio}.pdf")
+    if not os.path.isfile(ruta):
+        raise HTTPException(status_code=404, detail="cotización no encontrada")
+    return FileResponse(ruta, media_type="application/pdf", filename=f"{folio}.pdf")
 
 
 @app.get("/")
