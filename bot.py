@@ -3515,6 +3515,7 @@ CAL_LOGO_B64 = "iVBORw0KGgoAAAANSUhEUgAAAcwAAAEyCAIAAAD4IXe4AADGxUlEQVR42uxdZ4AU
 CAL_PENDIENTES = {}   # numero_cliente -> ruta_pdf (borradores por aprobar)
 CAL_APROBACION = {}   # folio -> {datos, cot, ruta, numero, estado}
 _CAL_FOLIO = {"n": 41}
+_CAL_FOLIO_FILE = os.path.join(DATA_DIR, "cal_folio.json")
 
 def es_consulta_calaminas(texto: str) -> bool:
     t = (texto or "").lower()
@@ -3531,8 +3532,33 @@ def _cal_money(v):
     return f"S/ {v:,.2f}"
 
 def _cal_folio():
-    _CAL_FOLIO["n"] += 1
-    return f"COT-{datetime.now().year}-{_CAL_FOLIO['n']:04d}"
+    """Folio ÚNICO y persistente. El contador se guarda en /var/data (sobrevive
+    reinicios de Render) y, como red de seguridad anti-colisión, se salta cualquier
+    folio cuyo PDF ya exista en disco."""
+    year = datetime.now().year
+    cotdir = os.path.join(DATA_DIR, "cotizaciones")
+    os.makedirs(cotdir, exist_ok=True)
+    try:
+        with open(_CAL_FOLIO_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+    n = int(data.get(str(year), 41))
+    while True:
+        n += 1
+        folio = f"COT-{year}-{n:04d}"
+        if not os.path.exists(os.path.join(cotdir, f"{folio}.pdf")):
+            break
+    data[str(year)] = n
+    try:
+        tmp = _CAL_FOLIO_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, _CAL_FOLIO_FILE)
+    except Exception as e:
+        print(f"[CAL-FOLIO ERROR] {e}", flush=True)
+    _CAL_FOLIO["n"] = n
+    return folio
 
 def _cal_logo_tmp():
     fd, ruta = _tmp.mkstemp(suffix=".png")
