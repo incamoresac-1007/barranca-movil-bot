@@ -2525,11 +2525,42 @@ async def _turismo_pago(numero: str, datos: dict):
 
 # ── Notificaciones ────────────────────────────────────────────────────────────
 async def notificar_operador_consulta(numero: str, consulta: str, respuesta: str):
-    if not OPERADOR_WA:
-        return
-    msg = (f"💬 *CONSULTA DIRECTA*\n\n📱 +{numero}\n"
-           f"❓ _{consulta}_\n🤖 _{respuesta[:100]}..._\n\nResponde directo a ese número.")
-    await enviar_mensaje(OPERADOR_WA, msg)
+    """Avisa al asesor (por correo) que un cliente pidió que lo llamen.
+    Incluye el número listo para marcar (botón Llamar en el celular)."""
+    tel = f"+{numero}"
+    asunto = f"📞 Cliente quiere que lo llames — {tel}"
+    consulta_txt = (consulta or "(sin detalle)").strip()
+    texto = (
+        f"Un cliente de El Cuervo pidió hablar con un asesor.\n\n"
+        f"Número (WhatsApp): {tel}\n"
+        f"Consulta: {consulta_txt}\n\n"
+        f"Llámalo cuando puedas. (Marca {tel})"
+    )
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#222">
+      <h2 style="color:#A6452F;margin-bottom:2px">El Cuervo</h2>
+      <p style="margin-top:0;color:#666">Un cliente pidió que lo llamen 📞</p>
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <tr><td style="padding:5px 0;color:#666">Número</td><td><b>{tel}</b></td></tr>
+        <tr><td style="padding:5px 0;color:#666">Consulta</td><td>{consulta_txt}</td></tr>
+      </table>
+      <div style="margin:22px 0">
+        <a href="tel:{tel}" style="display:inline-block;background:#1faa59;color:#fff;
+           text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold">📞 Llamar al cliente</a>
+      </div>
+      <p style="color:#999;font-size:12px">Toca el botón desde tu celular para llamar directo. — INCAMORE / El Cuervo</p>
+    </div>"""
+    try:
+        await asyncio.to_thread(_enviar_correo_sync, asunto, html, texto)
+    except Exception as e:
+        print(f"[OPERADOR-CORREO ERROR] {e}", flush=True)
+    # Respaldo opcional por WhatsApp si hay un operador configurado distinto al bot
+    if OPERADOR_WA:
+        try:
+            await enviar_mensaje(OPERADOR_WA,
+                f"📞 *Cliente quiere que lo llames*\n{tel}\n_{consulta_txt}_")
+        except Exception:
+            pass
 
 
 # ── Videos turísticos por destino ────────────────────────────────────────────
@@ -5205,7 +5236,9 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await notificar_operador_consulta(numero, datos.get("ultima_consulta",""), datos.get("ultima_respuesta",""))
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
             await enviar_mensaje(numero,
-                "👤 *¡Listo!*\n\nUn operador te contactará en breve.\n\nEscribe *menu* si deseas algo más.")
+                "👤 *¡Listo!* Un asesor te *llamará en breve* a este mismo número. 📞\n\n"
+                "No necesitas hacer nada más, nosotros te contactamos.\n\n"
+                "Escribe *menu* si deseas algo más mientras tanto.")
         else:
             resp = await respuesta_ia(numero, texto)
             datos["ultima_consulta"] = texto
