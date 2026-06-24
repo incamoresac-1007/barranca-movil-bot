@@ -2139,6 +2139,171 @@ MSG_TEC_MENU = (
 )
 
 
+async def extraer_datos_transporte(texto: str) -> dict:
+    """Agente (Claude API): extrae datos de una solicitud de transporte en texto libre.
+    Devuelve solo lo identificado. Sin API key o ante error -> {}."""
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key or len((texto or "").split()) < 4:
+        return {}
+    sys = (
+        "Extrae datos de una solicitud de transporte en Barranca, Perú. "
+        "Responde SOLO un JSON válido, sin texto adicional ni markdown, con estas claves "
+        "(usa null si no se menciona):\n"
+        '{"servicio": "taxi"|"colectivo"|"encomienda"|"turismo"|null, "nombre": string|null, '
+        '"destino": string|null, "pasajeros": number|null, "ida_vuelta": true/false/null}\n'
+        "Reglas: servicio=taxi si pide taxi/movilidad/carro; colectivo si menciona colectivo o compartido; "
+        "encomienda si va a enviar un paquete/cosa; turismo si pide tour/paseo/ruta turística. "
+        "destino: el lugar a donde va (ej: Puerto Supe, Lima, Plaza de Armas). "
+        "nombre: solo si la persona da su nombre y apellido. "
+        "pasajeros: número de personas que viajan. ida_vuelta=true si dice ida y vuelta/retorno."
+    )
+    def _claude():
+        return httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 200, "system": sys,
+                  "messages": [{"role": "user", "content": texto}]},
+            timeout=6.0)
+    try:
+        r = await asyncio.to_thread(_claude)
+        if r.status_code >= 400:
+            print(f"[AGENTE-TRANS ERROR] status={r.status_code} {r.text[:200]}", flush=True)
+            return {}
+        data = r.json()
+        raw = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(raw)
+        out = {}
+        s = (parsed.get("servicio") or "").lower()
+        mapa = {"taxi": "TAXI", "colectivo": "COLECTIVO", "encomienda": "ENCOMIENDA", "turismo": "TURISMO"}
+        if s in mapa:
+            out["servicio"] = mapa[s]
+        if isinstance(parsed.get("nombre"), str) and len(parsed["nombre"].split()) >= 2:
+            out["nombre"] = normalizar_nombre_persona(parsed["nombre"])
+        if isinstance(parsed.get("destino"), str) and parsed["destino"].strip():
+            out["destino_texto"] = parsed["destino"].strip()[:80]
+        try:
+            p = int(parsed.get("pasajeros"))
+            if p > 0:
+                out["pasajeros"] = p
+        except (TypeError, ValueError):
+            pass
+        if isinstance(parsed.get("ida_vuelta"), bool):
+            out["ida_vuelta"] = parsed["ida_vuelta"]
+        notas = []
+        if out.get("pasajeros"):
+            notas.append(f"{out['pasajeros']} pasajeros")
+        if out.get("ida_vuelta"):
+            notas.append("ida y vuelta")
+        if notas:
+            out["nota_cliente"] = " · ".join(notas)
+        return out
+    except Exception as e:
+        print(f"[AGENTE-TRANS ERROR] {e}", flush=True)
+        return {}
+
+def _trans_resumen_entendido(e: dict) -> str:
+    serv = {"TAXI": "taxi", "COLECTIVO": "colectivo", "ENCOMIENDA": "encomienda",
+            "TURISMO": "ruta turística"}.get(e.get("servicio"), "")
+    partes = []
+    if serv:
+        partes.append(serv)
+    if e.get("destino_texto"):
+        partes.append(f"a *{e['destino_texto']}*")
+    if e.get("pasajeros"):
+        partes.append(f"{e['pasajeros']} pasajeros")
+    if e.get("ida_vuelta"):
+        partes.append("ida y vuelta")
+    if not partes:
+        return ""
+    return "🚖 *Entendí:* " + ", ".join(partes) + ".\nCompletamos lo que falta 👇"
+
+async def _trans_tras_nombre(numero, sesion):
+    """Ramifica al paso siguiente según el servicio (reutilizable: lo llama S_NOMBRE
+    y la entrada por texto libre cuando el nombre ya vino dado)."""
+    datos = sesion["datos"]
+    servicio = datos.get("servicio")
+    if servicio == "TAXI":
+        sesion["estado"] = S_CUANDO
+        await enviar_mensaje(numero,
+            f"👍 Hola *{datos['nombre']}*!\n\n"
+            "🕐 *¿Cuándo necesitas el taxi?*\n\n"
+            "1️⃣ Ahora mismo\n"
+            "2️⃣ En menos de 1 hora\n"
+            "3️⃣ Programar fecha y hora 📅\n"
+            "4️⃣ Viaje recurrente 🔄")
+    elif servicio == "COLECTIVO":
+        sesion["estado"] = S_COLECTIVO_RUTA
+        rutas_txt = "\n".join([f"{k}️⃣ {v['emoji']} {v['nombre']} — S/{v['tarifa']:.2f}"
+                                for k, v in COLECTIVO_RUTAS.items()])
+        await enviar_mensaje(numero,
+            f"👍 Hola *{datos['nombre']}*! 🚌\n\n"
+            f"*¿A dónde vas?*\n\n"
+            f"{rutas_txt}\n\n"
+            f"_(Precio por pasajero. Recojo a domicilio sujeto a cupos disponibles o confirmación del conductor)_" + NAV)
+    elif servicio == "ENCOMIENDA":
+        sesion["estado"] = S_ENCOMIENDA_DESC
+        await enviar_mensaje(numero,
+            f"👍 Hola *{datos['nombre']}*!\n\n"
+            "📦 ¿Qué vas a enviar?\n"
+            "Puedes escribirlo o enviar un audio breve.\n"
+            "_Ejemplo: una silla de oficina de 20 kilos_")
+    elif servicio == "TURISMO":
+        sesion["estado"] = S_TURISMO_DESTINO
+        await enviar_mensaje(numero, f"👍 Hola *{datos['nombre']}*!\n\n" + MSG_TURISMO_OPCIONES)
+    else:
+        sesion["estado"] = S_TRANSPORTE_MENU
+        await enviar_mensaje(numero, MSG_TRANSPORTE_MENU)
+
+async def _trans_post_recojo(numero, sesion):
+    """Tras fijar el recojo: si el destino ya vino del texto libre, NO lo vuelve a
+    preguntar (tarifa a coordinar con el conductor). Si no, pide el destino normal."""
+    datos = sesion["datos"]
+    if datos.get("servicio") == "TAXI" and datos.get("destino_texto") and not datos.get("destino_coords"):
+        datos.update({"tarifa": "a coordinar", "tarifa_detalle": "coord. conductor", "km": 0})
+        sesion["estado"] = S_PAGO
+        nota = f"📝 {datos['nota_cliente']}\n" if datos.get("nota_cliente") else ""
+        await enviar_mensaje(numero,
+            f"📋 *Resumen:*\n\n"
+            f"👤 {datos.get('nombre','')}\n📍 {datos.get('recojo_texto','')}\n"
+            f"🏁 {datos['destino_texto']}\n{nota}"
+            f"💰 Tarifa: *a coordinar con el conductor*\n\n"
+            "💳 *¿Cómo pagas?*\n1️⃣ Efectivo\n2️⃣ Yape" + NAV)
+        return
+    sesion["estado"] = S_DESTINO
+    await enviar_mensaje(numero,
+        f"✅ Recojo: *{datos.get('recojo_texto','')}*\n\n"
+        "🏁 *¿A dónde vas?*\n\n"
+        "• 📌 Comparte ubicación del destino\n"
+        "• ✍️ O escribe el destino")
+
+async def _trans_entrar_texto_libre(numero, sesion, texto):
+    """Entrada por texto libre a Transporte: extrae, pre-llena y pide solo lo que falta."""
+    extraido = await extraer_datos_transporte(texto)
+    serv = extraido.get("servicio")
+    if not serv:
+        await enrutar_categoria(numero, sesion, "TRANSPORTE",
+            prefijo="🚖 ¡Claro! Te llevo a *Transporte*.\n\n")
+        return
+    datos = {"servicio": serv}
+    if extraido.get("nombre"):
+        datos["nombre"] = extraido["nombre"]
+    if serv == "TAXI" and extraido.get("destino_texto"):
+        datos["destino_texto"] = extraido["destino_texto"]
+    if extraido.get("nota_cliente"):
+        datos["nota_cliente"] = extraido["nota_cliente"]
+    sesion["datos"] = datos
+    resumen = _trans_resumen_entendido(extraido)
+    if resumen:
+        await enviar_mensaje(numero, resumen)
+    if datos.get("nombre"):
+        await _trans_tras_nombre(numero, sesion)
+    else:
+        sesion["estado"] = S_NOMBRE
+        await enviar_mensaje(numero,
+            "🙋 Para empezar, escribe tu *nombre y primer apellido*.\nEjemplo: *Ana Torres*")
+
+
 async def enrutar_categoria(numero: str, sesion: dict, categoria: str, prefijo: str = "") -> bool:
     """Lleva al cliente al flujo de la categoría detectada.
     Fuente única de verdad para el menú principal (la usan tanto las opciones
@@ -4849,7 +5014,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         puntuacion = datos.get("puntuacion", 3)
         sesiones[numero] = {"estado": S_MENU, "datos": {}}
 
-        OPCIONES_FINAL = "\n\n━━━━━━━━━━━━━━━━\n1️⃣ Nuevo servicio\n0️⃣ Salir"
+        OPCIONES_FINAL = ("\n\n━━━━━━━━━━━━━━━━\n1️⃣ Nuevo servicio\n0️⃣ Salir\n\n"
+                          "💬 _O escríbeme tu pedido directo (ej: \"taxi a Puerto Supe para 3\") y te ayudo._")
 
         if puntuacion >= 4:
             respuesta_final = (f"🙏 *¡Gracias por tu calificación!*\n\n"
@@ -4908,8 +5074,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 await iniciar_calaminas(numero, sesion)
                 return
             if categoria == "TRANSPORTE":
-                await enrutar_categoria(numero, sesion, "TRANSPORTE",
-                    prefijo="🚖 ¡Claro! Te llevo a *Transporte*.\n\n")
+                await _trans_entrar_texto_libre(numero, sesion, texto)
+                return
             elif categoria == "GASTRONOMIA":
                 await enrutar_categoria(numero, sesion, "GASTRONOMIA",
                     prefijo="🍽️ ¡Buenísimo! Te llevo a *Gastronomía*.\n\n")
@@ -5486,35 +5652,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             return
 
         datos["nombre"] = nombre_normalizado
-        servicio = datos.get("servicio")
-        if servicio == "TAXI":
-            sesion["estado"] = S_CUANDO
-            await enviar_mensaje(numero,
-                f"👍 Hola *{datos['nombre']}*!\n\n"
-                "🕐 *¿Cuándo necesitas el taxi?*\n\n"
-                "1️⃣ Ahora mismo\n"
-                "2️⃣ En menos de 1 hora\n"
-                "3️⃣ Programar fecha y hora 📅\n"
-                "4️⃣ Viaje recurrente 🔄")
-        elif servicio == "COLECTIVO":
-            sesion["estado"] = S_COLECTIVO_RUTA
-            rutas_txt = "\n".join([f"{k}️⃣ {v['emoji']} {v['nombre']} — S/{v['tarifa']:.2f}" 
-                                    for k,v in COLECTIVO_RUTAS.items()])
-            await enviar_mensaje(numero,
-                f"👍 Hola *{datos['nombre']}*! 🚌\n\n"
-                f"*¿A dónde vas?*\n\n"
-                f"{rutas_txt}\n\n"
-                f"_(Precio por pasajero. Recojo a domicilio sujeto a cupos disponibles o confirmación del conductor)_" + NAV)
-        elif servicio == "ENCOMIENDA":
-            sesion["estado"] = S_ENCOMIENDA_DESC
-            await enviar_mensaje(numero,
-                f"👍 Hola *{datos['nombre']}*!\n\n"
-                "📦 ¿Qué vas a enviar?\n"
-                "Puedes escribirlo o enviar un audio breve.\n"
-                "_Ejemplo: una silla de oficina de 20 kilos_")
-        elif servicio == "TURISMO":
-            sesion["estado"] = S_TURISMO_DESTINO
-            await enviar_mensaje(numero, f"👍 Hola *{datos['nombre']}*!\n\n" + MSG_TURISMO_OPCIONES)
+        await _trans_tras_nombre(numero, sesion)
 
     # ══ TAXI: ¿CUÁNDO? ═══════════════════════════════════════════════════════
     elif estado == S_CUANDO:
@@ -5607,12 +5745,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         if texto == "1":
             datos["recojo_texto"] = datos.pop("recojo_texto_temp")
             datos["recojo_coords"] = datos.pop("recojo_coords_temp")
-            sesion["estado"] = S_DESTINO
-            await enviar_mensaje(numero,
-                f"✅ Recojo: *{datos['recojo_texto']}*\n\n"
-                "🏁 *¿A dónde vas?*\n\n"
-                "• 📌 Comparte ubicación del destino\n"
-                "• ✍️ O escribe el destino")
+            await _trans_post_recojo(numero, sesion)
         elif texto == "2":
             datos.pop("recojo_texto_temp", None)
             datos.pop("recojo_coords_temp", None)
@@ -5681,13 +5814,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             direccion = await coords_a_direccion(lat, lng)
             datos["recojo_texto"] = direccion
             datos["recojo_coords"] = f"{lat},{lng}"
-            # GPS es preciso, ir directo al destino
-            sesion["estado"] = S_DESTINO
-            await enviar_mensaje(numero,
-                f"✅ Recojo: *{direccion}*\n\n"
-                "🏁 *¿A dónde vas?*\n\n"
-                "• 📌 Comparte ubicación del destino\n"
-                "• ✍️ O escribe el destino")
+            await _trans_post_recojo(numero, sesion)
         elif texto:
             # Sugerencia elegida de lista previa → DIRECTO sin confirmación extra
             if "_sugerencias" in datos and texto in ["1","2","3","4"]:
@@ -5699,12 +5826,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                     datos.pop("_sugerencias", None)
                     datos["recojo_texto"] = direccion
                     datos["recojo_coords"] = coords
-                    sesion["estado"] = S_DESTINO
-                    await enviar_mensaje(numero,
-                        f"✅ Recojo: *{direccion}*\n\n"
-                        "🏁 *¿A dónde vas?*\n\n"
-                        "• 📌 Comparte ubicación\n"
-                        "• ✍️ O escribe el destino")
+                    await _trans_post_recojo(numero, sesion)
                     return
                 datos.pop("_sugerencias", None)
             # Buscar con Autocomplete
