@@ -2344,6 +2344,26 @@ async def _edu_mostrar_resumen(numero: str, sesion: dict):
     await enviar_mensaje(numero, resumen)
 
 
+def _profesores_aprobados_tel():
+    """Teléfonos de profesores APROBADOS por el flujo 'Trabaja con nosotros'."""
+    try:
+        return {p.get("telefono", "") for p in cargar_proveedores_aprobados("profesor") if p.get("telefono")}
+    except Exception:
+        return set()
+
+def _profe_info(numero: str) -> dict:
+    """Datos del profesor, venga de la lista hardcodeada o de los aprobados por Únete."""
+    if numero in PROFESORES:
+        return PROFESORES[numero]
+    for p in cargar_proveedores_aprobados("profesor"):
+        if p.get("telefono") == numero:
+            return {"nombre": p.get("nombre", "Profesor verificado")}
+    return {"nombre": "Profesor verificado"}
+
+def _es_profesor(numero: str) -> bool:
+    return numero in PROFESORES or numero in _profesores_aprobados_tel()
+
+
 async def notificar_profesores(sesion: dict, numero_apoderado: str):
     """Despacha la solicitud de clase a los profesores que cubren el nivel y la
     modalidad pedidos. Reusa el envío inteligente (texto libre / plantilla)."""
@@ -2357,6 +2377,11 @@ async def notificar_profesores(sesion: dict, numero_apoderado: str):
         tel for tel, info in PROFESORES.items()
         if nivel in info.get("niveles", []) and modalidad in info.get("modalidad", [])
     ]
+    # Profesores APROBADOS por 'Trabaja con nosotros' (se autoseleccionan con ACEPTO).
+    for _p in cargar_proveedores_aprobados("profesor"):
+        _tel = _p.get("telefono", "")
+        if _tel and _tel not in candidatos:
+            candidatos.append(_tel)
 
     if not candidatos:
         await enviar_mensaje(numero_apoderado,
@@ -2423,7 +2448,7 @@ async def _asignar_clase_a_profe(numero_profe: str, num_ap_full: str):
     """Asigna una clase pendiente a un profesor y notifica a ambos + cierra a los demás."""
     clases_tomadas.add(num_ap_full)
     clase = clases_pendientes.pop(num_ap_full)
-    profe = PROFESORES[numero_profe]
+    profe = _profe_info(numero_profe)
     marcar_servicio_atendido(num_ap_full, profe.get("nombre", ""))
     d = clase["datos"]
     modalidad = d.get("edu_modalidad", "virtual")
@@ -4141,7 +4166,10 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         return
 
     # ── Profesor responde ACEPTO (Educación) — solo "acepto", sin número ──────
-    if numero in PROFESORES:
+    _notificado_clase = any(
+        numero in clases_pendientes[na].get("profesores_notificados", [])
+        for na in clases_pendientes)
+    if _es_profesor(numero) or _notificado_clase:
         _clases_profe = [na for na in clases_pendientes
                          if na not in clases_tomadas
                          and numero in clases_pendientes[na].get("profesores_notificados", [])]
