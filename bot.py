@@ -214,6 +214,7 @@ S_UNETE_CONFIRMAR    = "UNETE_CONFIRMAR"   # confirmación final
 
 # ── Servicios Técnicos (módulo madre: soporte técnico, gasfitería, etc.) ──────
 S_TEC_OFICIO         = "TEC_OFICIO"        # elige el oficio
+S_TEC_MODALIDAD      = "TEC_MODALIDAD"     # técnico va / cliente lleva al taller
 S_TEC_PROBLEMA       = "TEC_PROBLEMA"      # describe el problema/necesidad
 S_TEC_DIRECCION      = "TEC_DIRECCION"     # dónde es el servicio
 S_TEC_CUANDO         = "TEC_CUANDO"        # cuándo lo necesita
@@ -1273,13 +1274,15 @@ async def _agente_corregir_direccion(texto: str) -> str:
     if not api_key:
         return ""
     sys = (
-        "Corrige y formatea una dirección en Barranca, Perú. "
-        "Devuelve SOLO la dirección corregida en una línea, sin comillas ni explicaciones. "
+        "Eres un NORMALIZADOR de direcciones de Barranca, Perú. Tu única función es limpiar una dirección. "
+        "Devuelve EXCLUSIVAMENTE la dirección corregida en una sola línea, sin comillas ni explicaciones. "
         "Agrega el tipo de vía si es evidente (Calle, Jr., Av., Urb.), corrige mayúsculas "
-        "y añade ', Barranca' si no menciona la ciudad. "
-        "NO inventes números de casa ni datos que la persona no escribió; si algo no está, "
-        "no lo agregues. Si ya está bien, devuélvela igual. "
-        "Ejemplo: 'el lino' → 'Calle El Lino, Barranca'."
+        "y añade ', Barranca' si no menciona la ciudad. NO inventes números ni datos. "
+        "Si el texto NO es una dirección (es una pregunta, un comentario o una conversación), "
+        "responde EXACTAMENTE: NA\n"
+        "REGLAS ABSOLUTAS: nunca converses, nunca hagas preguntas, nunca te disculpes, "
+        "nunca digas que eres una IA, un asistente o un modelo. Solo devuelves una dirección o 'NA'. "
+        "Ejemplo: 'el lino' → 'Calle El Lino, Barranca'. Ejemplo: 'indícame tu dirección' → 'NA'."
     )
 
     def _claude():
@@ -1300,8 +1303,8 @@ async def _agente_corregir_direccion(texto: str) -> str:
         data = r.json()
         out = "".join(
             b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
-        ).strip().strip('"').strip()
-        return out[:120]
+        ).strip().strip('"').strip()[:120]
+        return out if _salida_es_direccion(out) else ""
     except Exception as e:
         print(f"[AGENTE ERROR] direccion: {e}", flush=True)
         return ""
@@ -2018,6 +2021,30 @@ def calcular_tarifa_taxi(destino_texto: str, km: float) -> tuple[float, str]:
     return float(tarifa_redondeada), f"urbano {km:.1f} km"
 
 # ── Groq IA ───────────────────────────────────────────────────────────────────
+_FUGA_IDENTIDAD = ["claude", "soy una ia", "soy un asistente", "asistente de ia",
+                   "asistente de inteligencia", "inteligencia artificial", "modelo de lenguaje",
+                   "modelo de ia", "como ia", "soy claude", "anthropic", "openai", "chatgpt",
+                   "soy un modelo", "soy una inteligencia", "no soy humano", "no soy una persona"]
+
+def _tiene_fuga_identidad(texto: str) -> bool:
+    t = (texto or "").lower()
+    return any(m in t for m in _FUGA_IDENTIDAD)
+
+def _salida_es_direccion(out: str) -> bool:
+    """True solo si la salida parece una dirección real (no conversación ni identidad)."""
+    t = (out or "").strip()
+    if not t or t.upper() == "NA":
+        return False
+    if len(t) > 90 or len(t.split()) > 14 or "?" in t:
+        return False
+    tl = t.lower()
+    malas = ["entiendo", "confus", "lo siento", "no puedo", "disculpa", "perdón", "perdon",
+             "necesito el servicio", "quieres", "ayudar", "no tengo", "no cuento", "no dispongo"]
+    if any(m in tl for m in malas):
+        return False
+    return not _tiene_fuga_identidad(t)
+
+
 async def respuesta_ia(numero: str, texto: str) -> str:
     if numero not in historial_ia:
         historial_ia[numero] = []
@@ -2035,6 +2062,9 @@ async def respuesta_ia(numero: str, texto: str) -> str:
     except (asyncio.TimeoutError, Exception):
         resp = ("Lo siento, no entendí tu consulta. ¿Necesitas taxi, colectivo, encomienda o turismo?\n\n"
                 "Escribe *menu* para ver las opciones.")
+    if _tiene_fuga_identidad(resp):
+        resp = ("¡Claro! Cuéntame con detalle qué necesitas y *El Cuervo* te ayuda. 🦅\n"
+                "Tenemos transporte, gastronomía, seguridad, servicios técnicos y educación.")
     historial_ia[numero].append({"role": "assistant", "content": resp})
     return resp
 
@@ -2396,6 +2426,30 @@ def _tec_resumen_entendido(d):
 def _seg_resumen_entendido(d):
     return ("🛡️ *Entendí:* " + d["seg_subcategoria"] + ".\nCompletamos lo que falta 👇") if d.get("seg_subcategoria") else ""
 
+# Punto de atención / taller (CAMBIAR por la dirección real de INCAMORE)
+TALLER_INCAMORE = "INCAMORE S.A.C — Barranca (📍 te enviaremos la ubicación exacta al confirmar)"
+
+def _tec_permite_taller(oficio: str) -> bool:
+    """Solo tiene sentido llevar el equipo al taller en trabajos transportables."""
+    o = (oficio or "").lower()
+    return ("soporte" in o) or ("electrodom" in o) or ("soldadura" in o)
+
+async def _tec_pedir_modalidad(numero, sesion):
+    """Si el trabajo es transportable, ofrece taller; si no, pide dirección directo."""
+    datos = sesion["datos"]
+    if _tec_permite_taller(datos.get("tec_oficio", "")):
+        sesion["estado"] = S_TEC_MODALIDAD
+        await enviar_mensaje(numero,
+            "🔧 *¿Cómo prefieres el servicio?*\n\n"
+            "1️⃣ Que el técnico vaya a *tu ubicación* 🏠\n"
+            "2️⃣ *Tú llevas el equipo* a nuestro taller 🏭\n"
+            "_(la opción 2 es ideal para empresas)_")
+    else:
+        sesion["estado"] = S_TEC_DIRECCION
+        await enviar_mensaje(numero,
+            "📍 ¿Dónde sería el servicio?\n• Comparte tu ubicación 📌\n• O escribe la dirección")
+
+
 async def _tec_entrar_texto_libre(numero, sesion, texto):
     e = await extraer_datos_tecnico(texto)
     datos = {"servicio": "SERVICIO_TECNICO"}
@@ -2409,9 +2463,7 @@ async def _tec_entrar_texto_libre(numero, sesion, texto):
     if resumen:
         await enviar_mensaje(numero, resumen)
     if datos.get("tec_oficio"):
-        sesion["estado"] = S_TEC_DIRECCION
-        await enviar_mensaje(numero,
-            "📍 ¿Dónde sería el servicio?\n• Comparte tu ubicación 📌\n• O escribe la dirección")
+        await _tec_pedir_modalidad(numero, sesion)
     else:
         sesion["estado"] = S_TEC_OFICIO
         await enviar_mensaje(numero, "🔧 Entendido. Te llevo a *Servicios Técnicos*.\n\n" + MSG_TEC_MENU)
@@ -5352,9 +5404,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             return
         datos["tec_oficio"] = TEC_OFICIOS[texto]
         if datos.get("tec_problema"):
-            sesion["estado"] = S_TEC_DIRECCION
-            await enviar_mensaje(numero,
-                "📍 ¿Dónde sería el servicio?\n• Comparte tu ubicación 📌\n• O escribe la dirección")
+            await _tec_pedir_modalidad(numero, sesion)
         else:
             sesion["estado"] = S_TEC_PROBLEMA
             await enviar_mensaje(numero,
@@ -5367,9 +5417,24 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero, "Por favor descríbeme un poco más qué necesitas.")
             return
         datos["tec_problema"] = texto.strip()
-        sesion["estado"] = S_TEC_DIRECCION
-        await enviar_mensaje(numero,
-            "📍 ¿Dónde sería el servicio?\n• Comparte tu ubicación 📌\n• O escribe la dirección")
+        await _tec_pedir_modalidad(numero, sesion)
+
+    elif estado == S_TEC_MODALIDAD:
+        if texto == "1":
+            datos["tec_modalidad"] = "A domicilio"
+            sesion["estado"] = S_TEC_DIRECCION
+            await enviar_mensaje(numero,
+                "📍 ¿Dónde sería el servicio?\n• Comparte tu ubicación 📌\n• O escribe la dirección")
+        elif texto == "2":
+            datos["tec_modalidad"] = "Cliente lleva al taller"
+            datos["tec_direccion"] = f"🏭 Cliente lleva el equipo al taller: {TALLER_INCAMORE}"
+            sesion["estado"] = S_TEC_CUANDO
+            await enviar_mensaje(numero,
+                f"🏭 *Perfecto.* Puedes traer tu equipo a nuestro taller:\n{TALLER_INCAMORE}\n\n"
+                "🕒 ¿Para cuándo lo traerías?\n_(Ej: hoy en la tarde, mañana 9am)_")
+        else:
+            await enviar_mensaje(numero,
+                "Responde *1* (vamos a tu ubicación) o *2* (tú traes el equipo al taller).")
 
     elif estado == S_TEC_DIRECCION:
         if tipo == "location" and isinstance(contenido, dict):
