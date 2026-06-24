@@ -2304,6 +2304,119 @@ async def _trans_entrar_texto_libre(numero, sesion, texto):
             "🙋 Para empezar, escribe tu *nombre y primer apellido*.\nEjemplo: *Ana Torres*")
 
 
+async def _extraer_json_claude(texto, sys, etiqueta):
+    """Llama a Claude Haiku y devuelve el JSON parseado, o {} ante error."""
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key or len((texto or "").split()) < 4:
+        return {}
+    def _claude():
+        return httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 200, "system": sys,
+                  "messages": [{"role": "user", "content": texto}]},
+            timeout=6.0)
+    try:
+        r = await asyncio.to_thread(_claude)
+        if r.status_code >= 400:
+            print(f"[AGENTE-{etiqueta} ERROR] status={r.status_code} {r.text[:160]}", flush=True)
+            return {}
+        data = r.json()
+        raw = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        return json.loads(raw)
+    except Exception as e:
+        print(f"[AGENTE-{etiqueta} ERROR] {e}", flush=True)
+        return {}
+
+async def extraer_datos_tecnico(texto: str) -> dict:
+    sys = (
+        "Extrae datos de una solicitud de servicio técnico/oficio en Barranca, Perú. "
+        "Responde SOLO un JSON válido, sin markdown, con estas claves (null si no aplica):\n"
+        '{"oficio": "soporte"|"gasfiteria"|"cerrajeria"|"electricista"|"electrodomesticos"|null, "problema": string|null}\n'
+        "soporte=PC/laptop/celular/impresora/red/cámaras/internet. gasfiteria=agua/caños/tuberías/desagüe. "
+        "cerrajeria=cerraduras/llaves/chapas. electricista=instalación eléctrica/enchufes/cableado/luz. "
+        "electrodomesticos=refrigeradora/lavadora/microondas/cocina. "
+        "problema: breve descripción de lo que necesita."
+    )
+    p = await _extraer_json_claude(texto, sys, "TEC")
+    out = {}
+    mapa = {"soporte": "1", "gasfiteria": "2", "cerrajeria": "3", "electricista": "4", "electrodomesticos": "5"}
+    o = (p.get("oficio") or "").lower()
+    if o in mapa:
+        out["oficio_idx"] = mapa[o]
+    if isinstance(p.get("problema"), str) and p["problema"].strip():
+        out["problema"] = p["problema"].strip()[:200]
+    return out
+
+async def extraer_datos_seguridad(texto: str) -> dict:
+    sys = (
+        "Extrae datos de una solicitud de seguridad/saneamiento en Barranca, Perú. "
+        "Responde SOLO un JSON válido, sin markdown, con estas claves (null si no aplica):\n"
+        '{"subcat": "extintores"|"senalizacion"|"fumigacion"|"capacitacion"|"otro"|null, "descripcion": string|null}\n'
+        "extintores=venta/recarga de extintores. senalizacion=señales de seguridad. "
+        "fumigacion=control de plagas/desinfección. capacitacion=charlas/defensa civil. "
+        "descripcion: breve detalle de lo que necesita."
+    )
+    p = await _extraer_json_claude(texto, sys, "SEG")
+    out = {}
+    mapa = {"extintores": "1", "senalizacion": "2", "fumigacion": "3", "capacitacion": "4", "otro": "5"}
+    s = (p.get("subcat") or "").lower()
+    if s in mapa:
+        out["subcat_idx"] = mapa[s]
+    if isinstance(p.get("descripcion"), str) and p["descripcion"].strip():
+        out["descripcion"] = p["descripcion"].strip()[:200]
+    return out
+
+def _tec_resumen_entendido(d):
+    return ("🛠️ *Entendí:* " + d["tec_oficio"] + ".\nCompletamos lo que falta 👇") if d.get("tec_oficio") else ""
+
+def _seg_resumen_entendido(d):
+    return ("🛡️ *Entendí:* " + d["seg_subcategoria"] + ".\nCompletamos lo que falta 👇") if d.get("seg_subcategoria") else ""
+
+async def _tec_entrar_texto_libre(numero, sesion, texto):
+    e = await extraer_datos_tecnico(texto)
+    datos = {"servicio": "SERVICIO_TECNICO"}
+    if e.get("oficio_idx") in TEC_OFICIOS:
+        datos["tec_oficio"] = TEC_OFICIOS[e["oficio_idx"]]
+    prob = e.get("problema") or (texto or "").strip()
+    if len(prob) >= 4:
+        datos["tec_problema"] = prob
+    sesion["datos"] = datos
+    resumen = _tec_resumen_entendido(datos)
+    if resumen:
+        await enviar_mensaje(numero, resumen)
+    if datos.get("tec_oficio"):
+        sesion["estado"] = S_TEC_DIRECCION
+        await enviar_mensaje(numero,
+            "📍 ¿Dónde sería el servicio?\n• Comparte tu ubicación 📌\n• O escribe la dirección")
+    else:
+        sesion["estado"] = S_TEC_OFICIO
+        await enviar_mensaje(numero, "🔧 Entendido. Te llevo a *Servicios Técnicos*.\n\n" + MSG_TEC_MENU)
+
+async def _seg_entrar_texto_libre(numero, sesion, texto):
+    e = await extraer_datos_seguridad(texto)
+    datos = {}
+    if e.get("subcat_idx") in SEG_SUBCATEGORIAS:
+        datos["seg_subcategoria"] = SEG_SUBCATEGORIAS[e["subcat_idx"]]
+    desc = e.get("descripcion") or (texto or "").strip()
+    if len(desc) >= 5:
+        datos["seg_descripcion"] = desc
+    sesion["datos"] = datos
+    resumen = _seg_resumen_entendido(datos)
+    if resumen:
+        await enviar_mensaje(numero, resumen)
+    if datos.get("seg_subcategoria"):
+        sesion["estado"] = S_SEG_UBICACION
+        await enviar_mensaje(numero,
+            "📍 *¿Cuál es la dirección donde se realizará el servicio?*\n"
+            "• Comparte tu ubicación 📌\n"
+            "• O escribe la dirección completa" + NAV)
+    else:
+        sesion["estado"] = S_SEG_SUBCATEGORIA
+        await enviar_mensaje(numero, "🛡️ Entendido. Te llevo a *Seguridad & Saneamiento*.\n\n" + MSG_SEG_SUBMENU)
+
+
 async def enrutar_categoria(numero: str, sesion: dict, categoria: str, prefijo: str = "") -> bool:
     """Lleva al cliente al flujo de la categoría detectada.
     Fuente única de verdad para el menú principal (la usan tanto las opciones
@@ -5080,8 +5193,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 await enrutar_categoria(numero, sesion, "GASTRONOMIA",
                     prefijo="🍽️ ¡Buenísimo! Te llevo a *Gastronomía*.\n\n")
             elif categoria == "SEGURIDAD":
-                await enrutar_categoria(numero, sesion, "SEGURIDAD",
-                    prefijo="🛡️ Entendido. Te llevo a *Seguridad & Saneamiento*.\n\n")
+                await _seg_entrar_texto_libre(numero, sesion, texto)
             elif categoria == "EDUCACION":
                 extraido = await extraer_datos_educacion(texto)
                 sesion["datos"] = {"servicio": "EDUCACION", **extraido}
@@ -5094,8 +5206,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                     await enrutar_categoria(numero, sesion, "EDUCACION",
                         prefijo="📚 ¡Perfecto! Te llevo a *Educación*.\n\n")
             elif categoria == "SERVICIOS_TECNICOS":
-                await enrutar_categoria(numero, sesion, "SERVICIOS_TECNICOS",
-                    prefijo="🔧 Entendido. Te llevo a *Servicios Técnicos*.\n\n")
+                await _tec_entrar_texto_libre(numero, sesion, texto)
             else:
                 resp = await respuesta_ia(numero, texto)
                 datos["ultima_consulta"] = texto
@@ -5218,11 +5329,16 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero, "Elige una opción del *1* al *5*, o *0* para volver.")
             return
         datos["tec_oficio"] = TEC_OFICIOS[texto]
-        sesion["estado"] = S_TEC_PROBLEMA
-        await enviar_mensaje(numero,
-            f"🛠️ *{datos['tec_oficio']}*\n\n"
-            "Cuéntame, ¿cuál es el problema o qué necesitas? "
-            "Descríbelo con el mayor detalle posible.")
+        if datos.get("tec_problema"):
+            sesion["estado"] = S_TEC_DIRECCION
+            await enviar_mensaje(numero,
+                "📍 ¿Dónde sería el servicio?\n• Comparte tu ubicación 📌\n• O escribe la dirección")
+        else:
+            sesion["estado"] = S_TEC_PROBLEMA
+            await enviar_mensaje(numero,
+                f"🛠️ *{datos['tec_oficio']}*\n\n"
+                "Cuéntame, ¿cuál es el problema o qué necesitas? "
+                "Descríbelo con el mayor detalle posible.")
 
     elif estado == S_TEC_PROBLEMA:
         if len((texto or "").strip()) < 4:
@@ -5346,11 +5462,18 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero, MSG_BIENVENIDA)
             return
         datos["seg_subcategoria"] = SEG_SUBCATEGORIAS[texto]
-        sesion["estado"] = S_SEG_DESCRIPCION
-        await enviar_mensaje(numero,
-            f"📋 *{SEG_SUBCATEGORIAS[texto]}*\n\n"
-            "Describe brevemente tu necesidad.\n"
-            "_(Ej: necesito recargar 3 extintores de 6kg para mi negocio)_" + NAV)
+        if datos.get("seg_descripcion"):
+            sesion["estado"] = S_SEG_UBICACION
+            await enviar_mensaje(numero,
+                "📍 *¿Cuál es la dirección donde se realizará el servicio?*\n"
+                "• Comparte tu ubicación 📌\n"
+                "• O escribe la dirección completa" + NAV)
+        else:
+            sesion["estado"] = S_SEG_DESCRIPCION
+            await enviar_mensaje(numero,
+                f"📋 *{SEG_SUBCATEGORIAS[texto]}*\n\n"
+                "Describe brevemente tu necesidad.\n"
+                "_(Ej: necesito recargar 3 extintores de 6kg para mi negocio)_" + NAV)
 
     elif estado == S_SEG_DESCRIPCION:
         if not texto or len(texto) < 5:
