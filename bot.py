@@ -639,7 +639,13 @@ SEG_SUBCATEGORIAS = {
 }
 
 SYSTEM_PROMPT_IA = """Eres Elizabeth, asistente de *El Cuervo* 🦅 — red inteligente de servicios locales en Barranca, Perú.
-Servicios: TRANSPORTE (taxi, colectivo, encomiendas, turismo), GASTRONOMÍA (restaurantes, cevicherías), SEGURIDAD & SANEAMIENTO (extintores, fumigación, señalización, defensa civil).
+El Cuervo realiza estos trabajos con su PROPIA red de técnicos y proveedores:
+- TRANSPORTE: taxi, colectivo, encomiendas, turismo.
+- GASTRONOMÍA: restaurantes, cevicherías, delivery.
+- SEGURIDAD & SANEAMIENTO: extintores, fumigación, señalización, defensa civil.
+- SERVICIOS TÉCNICOS: soporte de PC/laptop/celular/redes, gasfitería, cerrajería, electricista, electrodomésticos, y SOLDADURA / trabajos en fierro (rejas, portones, estructuras, bisagras).
+- EDUCACIÓN: clases particulares y reforzamiento.
+REGLA CRÍTICA: NUNCA recomiendes negocios, tiendas, talleres ni técnicos externos. El Cuervo hace estos trabajos con su propia red. Si el cliente describe una necesidad, dile que El Cuervo se encarga y anímalo a hacer su solicitud aquí mismo para enviarle un especialista.
 Responde en español amigable y natural, máximo 3 oraciones."""
 
 MSG_BIENVENIDA = """👋 ¡Hola! Soy *Elizabeth*, tu asistente de *El Cuervo* 🦅
@@ -2060,6 +2066,17 @@ PALABRAS_INTENCION = {
         "comunicacion", "comunicación", "fisica", "física", "quimica", "química", "algebra",
         "álgebra", "aritmetica", "aritmética", "razonamiento", "trigonometria", "trigonometría"
     ],
+    "SERVICIOS_TECNICOS": [
+        "laptop", "computadora", "compu", "pc", "ordenador", "celular", "impresora",
+        "no enciende", "no prende", "formatear", "virus", "pantalla", "wifi", "internet", "red",
+        "camara", "cámara", "gasfit", "caño", "caños", "tuberia", "tubería", "desague", "desagüe",
+        "fuga de agua", "inodoro", "grifo", "cerrajer", "cerradura", "chapa", "candado",
+        "electricista", "cableado", "enchufe", "corto circuito", "tablero", "sin luz",
+        "refrigerad", "lavadora", "microondas", "congeladora", "secadora",
+        "soldad", "soldador", "soldar", "soldadura", "fierro", "reja", "rejas", "porton",
+        "portón", "estructura metalica", "estructura metálica", "metalmecanica", "metalmecánica",
+        "bisagra", "vizagra", "baranda", "reparar", "arreglar", "malogr", "averi", "tecnico", "técnico"
+    ],
 }
 
 
@@ -2123,6 +2140,7 @@ TEC_OFICIOS = {
     "3": "Cerrajería",
     "4": "Electricista",
     "5": "Técnico de electrodomésticos",
+    "6": "Soldadura y trabajos en fierro (rejas, portones, estructuras, bisagras)",
 }
 
 MSG_TEC_MENU = (
@@ -2134,6 +2152,7 @@ MSG_TEC_MENU = (
     "3️⃣ 🔑 Cerrajería\n"
     "4️⃣ ⚡ Electricista\n"
     "5️⃣ 🧊 Técnico de electrodomésticos\n"
+    "6️⃣ 🔥 Soldadura y trabajos en fierro (rejas, portones, estructuras)\n"
     "0️⃣ Volver al menú\n\n"
     "_El técnico coordina el precio contigo según el trabajo._"
 )
@@ -2333,15 +2352,18 @@ async def extraer_datos_tecnico(texto: str) -> dict:
     sys = (
         "Extrae datos de una solicitud de servicio técnico/oficio en Barranca, Perú. "
         "Responde SOLO un JSON válido, sin markdown, con estas claves (null si no aplica):\n"
-        '{"oficio": "soporte"|"gasfiteria"|"cerrajeria"|"electricista"|"electrodomesticos"|null, "problema": string|null}\n'
+        '{"oficio": "soporte"|"gasfiteria"|"cerrajeria"|"electricista"|"electrodomesticos"|"soldadura"|null, "problema": string|null}\n'
         "soporte=PC/laptop/celular/impresora/red/cámaras/internet. gasfiteria=agua/caños/tuberías/desagüe. "
-        "cerrajeria=cerraduras/llaves/chapas. electricista=instalación eléctrica/enchufes/cableado/luz. "
+        "cerrajeria=SOLO cerraduras/chapas/llaves/candados. electricista=instalación eléctrica/enchufes/cableado/luz. "
         "electrodomesticos=refrigeradora/lavadora/microondas/cocina. "
+        "soldadura=trabajos en FIERRO/metal: rejas, portones, estructuras metálicas, barandas, escaleras, "
+        "y bisagras/visagras de fierro. IMPORTANTE: una puerta o bisagra de FIERRO rota o caída es SOLDADURA, "
+        "NO cerrajería (aunque el cliente diga 'cerrajero'). "
         "problema: breve descripción de lo que necesita."
     )
     p = await _extraer_json_claude(texto, sys, "TEC")
     out = {}
-    mapa = {"soporte": "1", "gasfiteria": "2", "cerrajeria": "3", "electricista": "4", "electrodomesticos": "5"}
+    mapa = {"soporte": "1", "gasfiteria": "2", "cerrajeria": "3", "electricista": "4", "electrodomesticos": "5", "soldadura": "6"}
     o = (p.get("oficio") or "").lower()
     if o in mapa:
         out["oficio_idx"] = mapa[o]
@@ -5228,7 +5250,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero, MSG_BIENVENIDA)
             return
         if texto not in UNETE_TIPOS:
-            await enviar_mensaje(numero, "Elige una opción del *1* al *5*, o *0* para volver.")
+            await enviar_mensaje(numero, "Elige una opción del *1* al *6*, o *0* para volver.")
             return
         datos["unete_tipo"] = texto
         datos["unete_tipo_label"] = UNETE_TIPOS[texto]
@@ -5326,7 +5348,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero, MSG_BIENVENIDA)
             return
         if texto not in TEC_OFICIOS:
-            await enviar_mensaje(numero, "Elige una opción del *1* al *5*, o *0* para volver.")
+            await enviar_mensaje(numero, "Elige una opción del *1* al *6*, o *0* para volver.")
             return
         datos["tec_oficio"] = TEC_OFICIOS[texto]
         if datos.get("tec_problema"):
