@@ -110,6 +110,8 @@ NAV = "\n\n_(✍️ *0* = paso anterior  ·  *menu* = inicio)_"
 
 # ── Estados ───────────────────────────────────────────────────────────────────
 S_MENU               = "MENU"
+S_PROV_PANEL         = "PROV_PANEL"   # panel del proveedor (sigue activo / baja)
+S_PROV_BAJA          = "PROV_BAJA"    # confirmación de baja
 
 # ── Estructuras / Calaminas (INCAMORE) ───────────────────────────────────────
 S_CAL_TIPO       = "CAL_TIPO"
@@ -1676,6 +1678,8 @@ async def obtener_conductores_para_recordatorio_turno():
                 tel = str(telefono).strip()
                 if not tel:
                     continue
+                if tel in _conductores_baja_set():
+                    continue
 
                 conductores.append({
                     "telefono": tel,
@@ -3067,6 +3071,7 @@ MSG_UNETE_CONDICIONES = (
 )
 
 PROVEEDORES_FILE = os.path.join(DATA_DIR, "proveedores.json")
+CONDUCTORES_BAJA_FILE = os.path.join(DATA_DIR, "conductores_baja.json")
 
 # Motivos de rechazo predefinidos (código -> texto que recibe el candidato)
 MOTIVOS_RECHAZO = {
@@ -3212,6 +3217,138 @@ def cargar_proveedores_aprobados(filtro_tipo: str = "") -> list:
     except Exception as e:
         print(f"[PROVEEDOR ERROR] cargar aprobados: {e}", flush=True)
         return []
+
+
+def _conductores_baja_set() -> set:
+    try:
+        with open(CONDUCTORES_BAJA_FILE, encoding="utf-8") as f:
+            return set(json.load(f) or [])
+    except Exception:
+        return set()
+
+def _conductor_baja_add(numero: str):
+    s = _conductores_baja_set(); s.add(numero)
+    try:
+        tmp = CONDUCTORES_BAJA_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(sorted(s), f)
+        os.replace(tmp, CONDUCTORES_BAJA_FILE)
+    except Exception as e:
+        print(f"[COND-BAJA ERROR] {e}", flush=True)
+
+def _proveedor_por_numero(numero: str):
+    """Reconoce si un número es proveedor (conductor/profesor/técnico/seguridad)."""
+    if "CONDUCTORES" in globals() and isinstance(CONDUCTORES, dict) and numero in CONDUCTORES:
+        if numero in _conductores_baja_set():
+            return None
+        info = CONDUCTORES[numero]
+        nom = (info.get("nombre") if isinstance(info, dict) else "") or "Conductor"
+        return {"tipo": "Conductor", "nombre": nom, "id": None, "fuente": "conductor"}
+    if numero in PROFESORES:
+        return {"tipo": "Profesor", "nombre": PROFESORES[numero].get("nombre", "Profesor"),
+                "id": None, "fuente": "profesor_hc"}
+    for p in cargar_proveedores_aprobados(""):
+        if p.get("telefono") == numero:
+            return {"tipo": p.get("tipo") or "Proveedor", "nombre": p.get("nombre", "Proveedor"),
+                    "id": p.get("id"), "fuente": "json"}
+    return None
+
+def _es_saludo_activacion(texto: str) -> bool:
+    t = (texto or "").strip().lower()
+    if not t:
+        return False
+    claves = ["hola", "ola", "buenas", "buenos dias", "buenos días", "buenas tardes",
+              "buenas noches", "activo", "activa", "activar", "estoy activo", "estoy activa",
+              "sigo activo", "sigo activa", "presente", "disponible", "aqui estoy", "aquí estoy"]
+    return any(t == k or t.startswith(k + " ") for k in claves)
+
+_FRASES_MOTIVADORAS = [
+    "🦅 El que vuela alto nunca pierde de vista su presa. ¡Sigamos cazando oportunidades!",
+    "💪 Cada solicitud es una puerta; El Cuervo te la trae, tú la conviertes en ingresos.",
+    "🔥 Los grandes no esperan la suerte, la construyen. ¡Hoy puede ser tu mejor día!",
+    "🦅 El Cuervo vuela contigo: tu esfuerzo de hoy es tu tranquilidad de mañana.",
+    "⚡ El que persevera, alcanza. ¡Mantente listo, que las solicitudes están por llegar!",
+]
+def _frase_motivadora():
+    import random
+    return random.choice(_FRASES_MOTIVADORAS)
+
+async def _mostrar_panel_proveedor(numero, prov):
+    sesiones[numero] = {"estado": S_PROV_PANEL, "datos": {"prov": prov}}
+    nombre = prov.get("nombre") or "proveedor"
+    await enviar_mensaje(numero,
+        f"🦅 *Hola, {nombre}.*\n\n"
+        "Notamos que hace un tiempo no recibías solicitudes por aquí. "
+        "Queremos confirmar si sigues *activo y listo* para atender lo que llegue.\n\n"
+        f"{_frase_motivadora()}\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "1️⃣ ✅ Sí, sigo activo\n"
+        "2️⃣ 👋 Quiero darme de baja\n"
+        "3️⃣ 🛒 Necesito un servicio (como cliente)")
+
+async def _panel_proveedor_respuesta(numero, sesion, texto):
+    op = (texto or "").strip().lower()
+    prov = sesion.get("datos", {}).get("prov", {})
+    nombre = prov.get("nombre") or "proveedor"
+    if op in ("1", "si", "sí", "activo", "activa", "sigo activo", "sigo activa"):
+        sesiones[numero] = {"estado": S_MENU, "datos": {}}
+        await enviar_mensaje(numero,
+            f"✅ ¡Excelente, {nombre}! Quedas *activo* y tu canal está abierto. 🦅\n\n"
+            f"{_frase_motivadora()}\n\n"
+            "Apenas llegue una solicitud para ti, te avisamos por aquí. "
+            "_Tip: escríbenos *activo* cada cierto tiempo para no perderte ninguna._")
+        return
+    if op in ("2", "baja", "darme de baja", "salir"):
+        sesion["estado"] = S_PROV_BAJA
+        await enviar_mensaje(numero,
+            f"👋 {nombre}, ¿seguro que quieres darte de *baja*?\n"
+            "Dejarás de recibir solicitudes hasta que vuelvas a activarte.\n\n"
+            "1️⃣ Sí, dar de baja\n2️⃣ No, mejor sigo activo")
+        return
+    if op in ("3", "servicio", "cliente", "menu", "menú"):
+        sesiones[numero] = {"estado": S_MENU, "datos": {}}
+        await enviar_mensaje(numero, MSG_BIENVENIDA)
+        return
+    await enviar_mensaje(numero,
+        "No te entendí 🙈.\n1️⃣ Sigo activo  ·  2️⃣ Darme de baja  ·  3️⃣ Necesito un servicio")
+
+async def _dar_de_baja_proveedor(numero, prov):
+    tipo = prov.get("tipo", "Proveedor"); nombre = prov.get("nombre", "Proveedor")
+    fuente = prov.get("fuente")
+    if fuente == "json" and prov.get("id"):
+        actualizar_estado_proveedor(prov["id"], "BAJA")
+    elif fuente == "conductor":
+        _conductor_baja_add(numero)
+    asunto = f"👋 Baja de proveedor — {nombre} ({tipo})"
+    texto = (f"Un proveedor se dio de baja desde el bot.\n\n"
+             f"Nombre: {nombre}\nTipo: {tipo}\nNúmero: +{numero}\n\n"
+             "Ya no recibirá solicitudes. Si fue un error, puedes reactivarlo.")
+    html = (f'<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#222">'
+            f'<h2 style="color:#A6452F">El Cuervo</h2><p>Un proveedor se dio de baja 👋</p>'
+            f'<table style="font-size:14px">'
+            f'<tr><td style="color:#666;padding:4px 8px 4px 0">Nombre</td><td><b>{nombre}</b></td></tr>'
+            f'<tr><td style="color:#666;padding:4px 8px 4px 0">Tipo</td><td>{tipo}</td></tr>'
+            f'<tr><td style="color:#666;padding:4px 8px 4px 0">Número</td><td>+{numero}</td></tr></table>'
+            f'<p style="color:#999;font-size:12px">Ya no recibirá solicitudes. — INCAMORE / El Cuervo</p></div>')
+    try:
+        await asyncio.to_thread(_enviar_correo_sync, asunto, html, texto)
+    except Exception as e:
+        print(f"[BAJA-CORREO ERROR] {e}", flush=True)
+
+async def _panel_proveedor_baja(numero, sesion, texto):
+    op = (texto or "").strip().lower()
+    prov = sesion.get("datos", {}).get("prov", {})
+    nombre = prov.get("nombre") or "proveedor"
+    if op in ("1", "si", "sí", "baja", "dar de baja"):
+        await _dar_de_baja_proveedor(numero, prov)
+        sesiones[numero] = {"estado": S_MENU, "datos": {}}
+        await enviar_mensaje(numero,
+            f"👋 Listo, {nombre}. Te diste de *baja* y ya no recibirás solicitudes.\n\n"
+            "Cuando quieras volver, escríbenos *activo* y te reactivamos al toque. "
+            "¡Las puertas de El Cuervo siempre estarán abiertas para ti! 🦅")
+        return
+    sesiones[numero] = {"estado": S_MENU, "datos": {}}
+    await enviar_mensaje(numero, f"😊 ¡Qué bueno, {nombre}! Sigues *activo*. {_frase_motivadora()}")
 
 
 def proveedores_seg_aprobados() -> list:
@@ -4644,6 +4781,19 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             "━━━━━━━━━━━━━━━━\n"
             "1️⃣ Nuevo servicio\n0️⃣ Salir")
         return
+
+    # ── Panel del proveedor (reengagement / baja) ────────────────────────────
+    if estado == S_PROV_PANEL:
+        await _panel_proveedor_respuesta(numero, sesion, texto)
+        return
+    if estado == S_PROV_BAJA:
+        await _panel_proveedor_baja(numero, sesion, texto)
+        return
+    if estado == S_MENU and _es_saludo_activacion(texto):
+        _prov = _proveedor_por_numero(numero)
+        if _prov:
+            await _mostrar_panel_proveedor(numero, _prov)
+            return
 
     palabras_menu = ["menu", "menú", "inicio", "hola", "hi", "buenas",
                      "buenos días", "buenas tardes", "buenas noches", "ola", "start"]
