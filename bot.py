@@ -2428,8 +2428,8 @@ def _tec_resumen_entendido(d):
 def _seg_resumen_entendido(d):
     return ("🛡️ *Entendí:* " + d["seg_subcategoria"] + ".\nCompletamos lo que falta 👇") if d.get("seg_subcategoria") else ""
 
-# Punto de atención / taller (CAMBIAR por la dirección real de INCAMORE)
-TALLER_INCAMORE = "INCAMORE S.A.C — Barranca (📍 te enviaremos la ubicación exacta al confirmar)"
+# Centro de Operaciones El Cuervo (dirección real INCAMORE)
+TALLER_INCAMORE = "Centro de Operaciones El Cuervo — Parque Virgen de Guadalupe Lt. 173, Barranca"
 
 def _tec_permite_taller(oficio: str) -> bool:
     """Solo tiene sentido llevar el equipo al taller en trabajos transportables."""
@@ -2444,7 +2444,7 @@ async def _tec_pedir_modalidad(numero, sesion):
         await enviar_mensaje(numero,
             "🔧 *¿Cómo prefieres el servicio?*\n\n"
             "1️⃣ Que el técnico vaya a *tu ubicación* 🏠\n"
-            "2️⃣ *Tú llevas el equipo* a nuestro taller 🏭\n"
+            "2️⃣ *Tú llevas el equipo* a nuestro *Centro de Operaciones* 🏭\n"
             "_(la opción 2 es ideal para empresas)_")
     else:
         sesion["estado"] = S_TEC_DIRECCION
@@ -2911,13 +2911,15 @@ async def notificar_operador_consulta(numero: str, consulta: str, respuesta: str
     """Avisa al asesor (por correo) que un cliente pidió que lo llamen.
     Incluye el número listo para marcar (botón Llamar en el celular)."""
     tel = f"+{numero}"
+    wa_num = "".join(ch for ch in str(numero) if ch.isdigit())  # wa.me sin '+' ni espacios
+    wa_link = f"https://wa.me/{wa_num}"
     asunto = f"📞 Cliente quiere que lo llames — {tel}"
     consulta_txt = (consulta or "(sin detalle)").strip()
     texto = (
         f"Un cliente de El Cuervo pidió hablar con un asesor.\n\n"
         f"Número (WhatsApp): {tel}\n"
         f"Consulta: {consulta_txt}\n\n"
-        f"Llámalo cuando puedas. (Marca {tel})"
+        f"Llámalo o escríbele por WhatsApp: {wa_link}"
     )
     html = f"""
     <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#222">
@@ -2929,9 +2931,11 @@ async def notificar_operador_consulta(numero: str, consulta: str, respuesta: str
       </table>
       <div style="margin:22px 0">
         <a href="tel:{tel}" style="display:inline-block;background:#1faa59;color:#fff;
-           text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold">📞 Llamar al cliente</a>
+           text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;margin-right:8px">📞 Llamar al cliente</a>
+        <a href="{wa_link}" style="display:inline-block;background:#25D366;color:#fff;
+           text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;margin-top:10px">💬 Escribir por WhatsApp</a>
       </div>
-      <p style="color:#999;font-size:12px">Toca el botón desde tu celular para llamar directo. — INCAMORE / El Cuervo</p>
+      <p style="color:#999;font-size:12px">Toca un botón desde tu celular para contactar directo. — INCAMORE / El Cuervo</p>
     </div>"""
     try:
         await asyncio.to_thread(_enviar_correo_sync, asunto, html, texto)
@@ -5511,15 +5515,15 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero,
                 "📍 ¿Dónde sería el servicio?\n• Comparte tu ubicación 📌\n• O escribe la dirección")
         elif texto == "2":
-            datos["tec_modalidad"] = "Cliente lleva al taller"
-            datos["tec_direccion"] = f"🏭 Cliente lleva el equipo al taller: {TALLER_INCAMORE}"
+            datos["tec_modalidad"] = "Cliente lleva al Centro de Operaciones"
+            datos["tec_direccion"] = f"🏭 Cliente lleva el equipo al Centro de Operaciones: {TALLER_INCAMORE}"
             sesion["estado"] = S_TEC_CUANDO
             await enviar_mensaje(numero,
-                f"🏭 *Perfecto.* Puedes traer tu equipo a nuestro taller:\n{TALLER_INCAMORE}\n\n"
+                f"🏭 *Perfecto.* Puedes traer tu equipo a nuestro Centro de Operaciones:\n{TALLER_INCAMORE}\n\n"
                 "🕒 ¿Para cuándo lo traerías?\n_(Ej: hoy en la tarde, mañana 9am)_")
         else:
             await enviar_mensaje(numero,
-                "Responde *1* (vamos a tu ubicación) o *2* (tú traes el equipo al taller).")
+                "Responde *1* (vamos a tu ubicación) o *2* (tú traes el equipo al Centro de Operaciones).")
 
     elif estado == S_TEC_DIRECCION:
         if tipo == "location" and isinstance(contenido, dict):
