@@ -3560,6 +3560,30 @@ def actualizar_estado_proveedor(pid: str, nuevo_estado: str):
         return None
 
 
+async def _proveedor_a_sheets(reg: dict):
+    """Espeja un proveedor a la pestaña PROVEEDORES del Google Sheet (upsert por ID_PROVEEDOR)."""
+    try:
+        await sheets_evento("upsert_proveedor", {
+            "id":          reg.get("id", ""),
+            "estado":      reg.get("estado", ""),
+            "fecha":       reg.get("fecha", ""),
+            "modulo":      reg.get("tipo", ""),
+            "oficio":      reg.get("detalle", "") or reg.get("negocio", ""),
+            "nombre":      reg.get("nombre", ""),
+            "telefono":    reg.get("telefono", ""),
+            "documento":   reg.get("documento", ""),
+            "empresa":     reg.get("negocio", ""),
+            "placa":       reg.get("placa", ""),
+            "zona":        "Barranca",
+            "modalidad":   reg.get("modalidad", ""),
+            "comision":    "",
+            "observacion": reg.get("direccion", "") or reg.get("detalle", ""),
+            "validado_el": reg.get("validado_el", ""),
+        })
+    except Exception as e:
+        print(f"[PROVEEDOR->SHEETS] {e}", flush=True)
+
+
 def cargar_proveedores_aprobados(filtro_tipo: str = "") -> list:
     """Devuelve los proveedores APROBADOS (opcionalmente filtrando por texto del tipo)."""
     try:
@@ -3963,6 +3987,7 @@ async def _unete_finalizar(numero: str, sesion: dict):
         "estado": "PENDIENTE_VALIDACION",
     }
     guardar_proveedor(registro)
+    await _proveedor_a_sheets(registro)
 
     # Aviso al admin (si hay número configurado en Render)
     admin = os.getenv("ADMIN_WHATSAPP", "").strip()
@@ -7610,6 +7635,7 @@ async def proveedor_aprobar(clave: str = "", id: str = ""):
             "_Gracias por sumarte. ¡A trabajar juntos!_")
     except Exception:
         pass
+    await _proveedor_a_sheets(reg)
     return _pagina_resultado("Proveedor aprobado",
         f"<b>{reg.get('nombre','')}</b> ({reg.get('tipo','')}) ya está <b>ACTIVO</b> en El Cuervo. "
         "Se le notificó por WhatsApp.", "✅")
@@ -7631,6 +7657,7 @@ async def proveedor_rechazar(clave: str = "", id: str = "", motivo: str = "otro"
             "Agradecemos tu comprensión.")
     except Exception:
         pass
+    await _proveedor_a_sheets(reg)
     return _pagina_resultado("Registro rechazado",
         f"<b>{reg.get('nombre','')}</b> ({reg.get('tipo','')}) fue <b>RECHAZADO</b>.<br>"
         f"Motivo enviado: <i>{motivo_txt}</i>", "❌")
