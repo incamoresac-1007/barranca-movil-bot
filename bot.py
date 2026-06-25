@@ -3992,6 +3992,42 @@ async def _unete_finalizar(numero: str, sesion: dict):
         "Escribe *menu* para volver al inicio.")
 
 
+_TEC_OFICIO_KW = {
+    "soporte": ["soporte", "informatic", "informát", "computad", "laptop", "pc", "ordenador",
+                "redes", "sistema", "software", "hardware", "celular", "impresora", "camara", "cámara"],
+    "gasfit": ["gasfit", "agua", "tuberia", "tubería", "sanitario", "caño", "desague", "desagüe", "inodoro"],
+    "cerrajer": ["cerrajer", "cerradura", "llave", "chapa", "candado"],
+    "electric": ["electric", "eléctric", "cableado", "instalacion electrica", "enchufe", "tablero", "pozo a tierra"],
+    "electrodom": ["electrodom", "refrigerad", "lavadora", "microondas", "linea blanca", "línea blanca", "congeladora", "secadora"],
+    "soldad": ["soldad", "fierro", "metal", "estructura", "calderia", "caldería", "metalmecanic", "reja", "porton", "portón", "herreria", "herrería"],
+}
+
+def _tec_oficio_clave(oficio_str: str) -> str:
+    o = (oficio_str or "").lower()
+    if "soporte" in o or "informát" in o or "informat" in o:
+        return "soporte"
+    if "gasfit" in o:
+        return "gasfit"
+    if "cerrajer" in o:
+        return "cerrajer"
+    if "electrodom" in o:
+        return "electrodom"
+    if "electric" in o or "eléctric" in o:
+        return "electric"
+    if "soldad" in o or "fierro" in o:
+        return "soldad"
+    return ""
+
+def _tecnico_cubre_oficio(prov: dict, oficio_str: str) -> bool:
+    """¿El técnico cubre ese oficio? Se basa en lo que describió al registrarse."""
+    clave = _tec_oficio_clave(oficio_str)
+    if not clave:
+        return True  # oficio no reconocido -> no filtrar (mejor avisar a todos)
+    kws = _TEC_OFICIO_KW.get(clave, [])
+    texto = " ".join(str(prov.get(k, "")) for k in ("detalle", "negocio", "nombre", "tipo")).lower()
+    return any(k in texto for k in kws)
+
+
 async def _tec_mostrar_confirmacion(numero, sesion):
     datos = sesion["datos"]
     sesion["estado"] = S_TEC_CONFIRMAR
@@ -4036,8 +4072,10 @@ async def _tec_finalizar(numero: str, sesion: dict):
     d = sesion["datos"]
     registrar_servicio("SERVICIO_TECNICO", d, numero)
 
+    oficio = d.get("tec_oficio", "")
     tecnicos = cargar_proveedores_aprobados("técnico")
-    tels = list(dict.fromkeys([t.get("telefono", "") for t in tecnicos if t.get("telefono")]))
+    coincidentes = [t for t in tecnicos if _tecnico_cubre_oficio(t, oficio)]
+    tels = list(dict.fromkeys([t.get("telefono", "") for t in coincidentes if t.get("telefono")]))
 
     resumen = (
         "🔧 *Nueva solicitud de servicio técnico*\n\n"
@@ -4062,7 +4100,10 @@ async def _tec_finalizar(numero: str, sesion: dict):
     else:
         admin = os.getenv("ADMIN_WHATSAPP", "").strip()
         if admin:
-            await enviar_mensaje(admin, resumen + f"\n📱 Contacto: +{numero}\n_(No hay técnicos aprobados; coordínalo tú.)_")
+            await enviar_mensaje(admin,
+                "⚠️ *Solicitud sin técnico de ese oficio*\n\n" + resumen +
+                f"📱 Contacto: +{numero}\n\n"
+                f"_No hay un técnico registrado para *{oficio}*. Coordínalo tú o registra a un especialista de ese oficio._")
 
     sesion["estado"] = S_MENU
     sesion["datos"] = {}
