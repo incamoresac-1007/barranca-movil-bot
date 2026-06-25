@@ -219,6 +219,7 @@ S_TEC_PROBLEMA       = "TEC_PROBLEMA"      # describe el problema/necesidad
 S_TEC_DIRECCION      = "TEC_DIRECCION"     # dónde es el servicio
 S_TEC_CUANDO         = "TEC_CUANDO"        # cuándo lo necesita
 S_TEC_CONFIRMAR      = "TEC_CONFIRMAR"     # resumen y confirmación
+S_TEC_NOMBRE         = "TEC_NOMBRE"        # nombre del cliente (si falta)
 # ── Mapa estado → estado anterior ────────────────────────────────────────────
 ESTADO_ANTERIOR = {
     S_NOMBRE:               S_MENU,
@@ -381,6 +382,7 @@ clases_tomadas: set[str] = set()
 
 # Servicios pendientes de aceptación {numero_cliente: datos_servicio}
 servicios_pendientes: dict[str, dict] = {}
+tec_pendientes: dict[str, dict] = {}   # numero_cliente -> {datos, tecnicos, tomado}
 # Servicios ya tomados para evitar doble asignación
 servicios_tomados: set[str] = set()
 calificacion_pendiente: set[str] = set()  # números con calificación ya programada
@@ -3990,49 +3992,84 @@ async def _unete_finalizar(numero: str, sesion: dict):
         "Escribe *menu* para volver al inicio.")
 
 
+async def _tec_mostrar_confirmacion(numero, sesion):
+    datos = sesion["datos"]
+    sesion["estado"] = S_TEC_CONFIRMAR
+    await enviar_mensaje(numero,
+        "📋 *Confirma tu solicitud:*\n\n"
+        f"🛠️ {datos.get('tec_oficio','')}\n"
+        f"👤 {datos.get('nombre','')}\n"
+        f"📝 {datos.get('tec_problema','')}\n"
+        f"📍 {datos.get('tec_direccion','')}\n"
+        f"🕒 {datos.get('tec_cuando','')}\n\n"
+        "_El técnico coordinará el precio contigo según el trabajo._\n\n"
+        "1️⃣ Confirmar y enviar\n"
+        "2️⃣ Cancelar")
+
+async def _asignar_tec(numero_tec):
+    """Primer técnico que responde ACEPTO se lleva el servicio."""
+    for cli, reg in list(tec_pendientes.items()):
+        if not reg.get("tomado") and numero_tec in reg.get("tecnicos", []):
+            reg["tomado"] = True
+            d = reg["datos"]
+            await enviar_mensaje(numero_tec,
+                "✅ *¡Servicio asignado a ti!* 🦅\n\n"
+                f"🛠️ {d.get('tec_oficio','')}\n"
+                f"👤 {d.get('nombre','(cliente)')}\n"
+                f"📝 {d.get('tec_problema','')}\n"
+                f"📍 {d.get('tec_direccion','')}\n"
+                f"🕒 {d.get('tec_cuando','')}\n"
+                f"📱 Contacto del cliente: +{cli}\n\n"
+                "_Comunícate con el cliente para coordinar visita y precio._")
+            await enviar_mensaje(cli,
+                "✅ *¡Buenas noticias!* Un técnico tomó tu solicitud y te contactará en breve para coordinar. 🦅")
+            for otro in reg.get("tecnicos", []):
+                if otro != numero_tec:
+                    await enviar_mensaje(otro,
+                        "ℹ️ Esa solicitud técnica ya fue tomada por otro técnico. ¡Gracias por responder! 🦅")
+            tec_pendientes.pop(cli, None)
+            return True
+    return False
+
 async def _tec_finalizar(numero: str, sesion: dict):
-    """Registra la solicitud técnica, avisa al admin y cierra con el cliente."""
+    """Registra la solicitud y la ofrece a los técnicos aprobados (flujo ACEPTO)."""
     d = sesion["datos"]
     registrar_servicio("SERVICIO_TECNICO", d, numero)
 
-    admin = os.getenv("ADMIN_WHATSAPP", "").strip()
-    if admin:
-        await enviar_mensaje(admin,
-            f"🔧 *Nueva solicitud — Servicios Técnicos*\n\n"
-            f"🛠️ Oficio: {d.get('tec_oficio','')}\n"
-            f"👤 {d.get('nombre','(sin nombre)')}\n"
-            f"📱 +{numero}\n"
-            f"📝 {d.get('tec_problema','')}\n"
-            f"📍 {d.get('tec_direccion','(no indicada)')}\n"
-            f"🕒 {d.get('tec_cuando','(a coordinar)')}\n\n"
-            "_Asignar un técnico y coordinar._")
-
-    # Notificar a los técnicos APROBADOS (los que aprobaste por correo)
     tecnicos = cargar_proveedores_aprobados("técnico")
-    if tecnicos:
-        aviso_tec = (
-            "🔧 *Nueva solicitud de servicio técnico*\n\n"
-            f"🛠️ {d.get('tec_oficio','')}\n"
-            f"📝 {d.get('tec_problema','')}\n"
-            f"📍 {d.get('tec_direccion','(no indicada)')}\n"
-            f"🕒 {d.get('tec_cuando','(a coordinar)')}\n\n"
-            f"📱 Contacto del cliente: +{numero}\n"
-            f"👤 {d.get('nombre','(cliente)')}\n\n"
-            "_Si puedes atenderlo, comunícate directamente con el cliente para coordinar visita y precio._")
+    tels = list(dict.fromkeys([t.get("telefono", "") for t in tecnicos if t.get("telefono")]))
+
+    resumen = (
+        "🔧 *Nueva solicitud de servicio técnico*\n\n"
+        f"🛠️ {d.get('tec_oficio','')}\n"
+        + (f"👤 Cliente: {d['nombre']}\n" if d.get('nombre') else "")
+        + f"📝 {d.get('tec_problema','')}\n"
+        f"📍 {d.get('tec_direccion','(no indicada)')}\n"
+        f"🕒 {d.get('tec_cuando','(a coordinar)')}\n"
+    )
+
+    if tels:
+        tec_pendientes[numero] = {"datos": dict(d), "tecnicos": tels, "tomado": False, "creado": time.time()}
+        aviso = resumen + ("\n👉 Responde *ACEPTO* para tomar este servicio.\n"
+                           "_(El primero en aceptar recibe el contacto del cliente.)_")
+        cliente_str = _limpiar_param_template(f"{d.get('nombre','Cliente')} | servicio tecnico")
+        detalle_corto = _limpiar_param_template(f"{d.get('tec_oficio','')} | {str(d.get('tec_problema',''))[:40]}")
         await asyncio.gather(*[
-            enviar_mensaje(t.get("telefono", ""), aviso_tec) for t in tecnicos if t.get("telefono")
+            notificar_conductor_inteligente(t, aviso, "SERVICIO", cliente_str, detalle_corto, numero)
+            for t in tels
         ], return_exceptions=True)
-        print(f"[TEC] solicitud enviada a {len(tecnicos)} técnico(s) aprobado(s)", flush=True)
+        print(f"[TEC] solicitud ofrecida a {len(tels)} tecnico(s) aprobado(s)", flush=True)
+    else:
+        admin = os.getenv("ADMIN_WHATSAPP", "").strip()
+        if admin:
+            await enviar_mensaje(admin, resumen + f"\n📱 Contacto: +{numero}\n_(No hay técnicos aprobados; coordínalo tú.)_")
 
     sesion["estado"] = S_MENU
     sesion["datos"] = {}
     await enviar_mensaje(numero,
         "✅ *¡Solicitud recibida!*\n\n"
-        "Estamos buscando un técnico disponible para tu necesidad. "
-        "En breve te contactaremos para coordinar la visita y el precio.\n\n"
-        "Escribe *menu* para volver al inicio. 🦅")
-
-
+        "Estamos contactando a un técnico disponible. En breve te confirmamos. 🦅\n\n"
+        "Escribe *menu* para volver al inicio.")
 
 import re  # (calaminas)
 
@@ -4690,6 +4727,13 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             else:
                 await enviar_mensaje(numero, "No tienes clases pendientes por aceptar.")
             return
+
+    # ── Técnico responde ACEPTO ──────────────────────────────────────────────
+    _txt_ac = (texto or "").strip().lower()
+    if _txt_ac in {"acepto", "acepta", "lo tomo", "yo voy", "tomo"} and any(
+            (not r.get("tomado")) and numero in r.get("tecnicos", []) for r in tec_pendientes.values()):
+        await _asignar_tec(numero)
+        return
 
     # ── Conductor responde ACEPTO (con sinónimos) ────────────────────────────
     SINONIMOS_ACEPTO = {"listo","si","sí","ok","dale","voy","ya","tomo","vamos"}
@@ -5455,16 +5499,19 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero, "Cuéntame para cuándo lo necesitas.")
             return
         datos["tec_cuando"] = texto.strip()
-        sesion["estado"] = S_TEC_CONFIRMAR
-        await enviar_mensaje(numero,
-            "📋 *Confirma tu solicitud:*\n\n"
-            f"🛠️ {datos.get('tec_oficio','')}\n"
-            f"📝 {datos.get('tec_problema','')}\n"
-            f"📍 {datos.get('tec_direccion','')}\n"
-            f"🕒 {datos.get('tec_cuando','')}\n\n"
-            "_El técnico coordinará el precio contigo según el trabajo._\n\n"
-            "1️⃣ Confirmar y enviar\n"
-            "2️⃣ Cancelar")
+        if not datos.get("nombre"):
+            sesion["estado"] = S_TEC_NOMBRE
+            await enviar_mensaje(numero, "🙋 ¿A nombre de quién registramos la solicitud?")
+            return
+        await _tec_mostrar_confirmacion(numero, sesion)
+
+    elif estado == S_TEC_NOMBRE:
+        nom = (texto or "").strip()
+        if len(nom) < 2:
+            await enviar_mensaje(numero, "Escríbeme tu nombre por favor 🙂")
+            return
+        datos["nombre"] = normalizar_nombre_persona(nom)
+        await _tec_mostrar_confirmacion(numero, sesion)
 
     elif estado == S_TEC_CONFIRMAR:
         if texto == "1" or texto.strip().lower() in ("confirmo", "si", "sí", "ok"):
