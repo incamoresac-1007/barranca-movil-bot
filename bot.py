@@ -2809,6 +2809,13 @@ async def _asignar_clase_a_profe(numero_profe: str, num_ap_full: str):
     profe = _profe_info(numero_profe)
     marcar_servicio_atendido(num_ap_full, profe.get("nombre", ""))
     d = clase["datos"]
+    try:
+        _profe_sheet = {"nombre": profe.get("nombre", "Profesor"),
+                        "telefono": profe.get("telefono", numero_profe), "placa": ""}
+        await sheets_evento("upsert_servicio",
+            armar_sheets_servicio(num_ap_full, "EDUCACION", d, "ASIGNADO", _profe_sheet))
+    except Exception as e:
+        print(f"[EDU->SHEETS] {e}", flush=True)
     modalidad = d.get("edu_modalidad", "virtual")
     nivel_lbl = NIVEL_LABEL.get(d.get("edu_nivel"), d.get("edu_nivel", ""))
 
@@ -3487,6 +3494,17 @@ def registrar_servicio(tipo_servicio: str, datos: dict, numero: str) -> str:
             json.dump(data, f, ensure_ascii=False)
         os.replace(tmp, SERVICIOS_FILE)
         print(f"[SERVICIO] {tipo_servicio} registrado {sid} cliente={numero} monto={registro['monto']}", flush=True)
+        # ── Registro UNIVERSAL en el Sheet (todos los módulos pasan por aquí) ──
+        try:
+            import asyncio as _aio
+            if "sheets_evento" in globals() and "armar_sheets_servicio" in globals():
+                _loop = _aio.get_event_loop()
+                if _loop.is_running():
+                    _aio.create_task(sheets_evento(
+                        "upsert_servicio",
+                        armar_sheets_servicio(numero, tipo_servicio, datos, "SOLICITADO")))
+        except Exception as _e:
+            print(f"[SERVICIO->SHEETS] {_e}", flush=True)
         return sid
     except Exception as e:
         print(f"[SERVICIO ERROR] registrar: {e}", flush=True)
