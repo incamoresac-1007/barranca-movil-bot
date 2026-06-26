@@ -3422,6 +3422,7 @@ UNETE_TIPOS = {
     "4": "Profesor",
     "5": "Seguridad y Defensa Civil",
     "6": "Técnico / Especialista",
+    "7": "Belleza y Cuidado",
 }
 
 MSG_UNETE_CONDICIONES = (
@@ -3967,6 +3968,7 @@ async def iniciar_unete(numero: str, sesion: dict):
         "4️⃣ Profesor (reforzamiento escolar)\n"
         "5️⃣ Seguridad y Defensa Civil\n"
         "6️⃣ Técnico / Especialista (soporte técnico, gasfitería, etc.)\n"
+        "7️⃣ 💅 Belleza y Cuidado (uñas, podología, peluquería, etc.)\n"
         "0️⃣ Volver al menú")
 
 
@@ -5462,7 +5464,7 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero, MSG_BIENVENIDA)
             return
         if texto not in UNETE_TIPOS:
-            await enviar_mensaje(numero, "Elige una opción del *1* al *6*, o *0* para volver.")
+            await enviar_mensaje(numero, "Elige una opción del *1* al *7*, o *0* para volver.")
             return
         datos["unete_tipo"] = texto
         datos["unete_tipo_label"] = UNETE_TIPOS[texto]
@@ -5504,6 +5506,11 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             await enviar_mensaje(numero,
                 "🛠️ ¿Cuál es tu *oficio o especialidad*?\n"
                 "_(Ej: soporte técnico de PC y celulares, gasfitería, cerrajería, electricista)_")
+        elif t == "7":  # belleza y cuidado
+            sesion["estado"] = S_UNETE_DETALLE
+            await enviar_mensaje(numero,
+                "💅 ¿Cuál es tu *especialidad de belleza*?\n"
+                "_(Ej: uñas/manicure, podología, peluquería, barbería, maquillaje, depilación)_")
         else:  # seguridad
             sesion["estado"] = S_UNETE_DETALLE
             await enviar_mensaje(numero,
