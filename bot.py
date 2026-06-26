@@ -4071,12 +4071,28 @@ async def _tec_mostrar_confirmacion(numero, sesion):
         "1️⃣ Confirmar y enviar\n"
         "2️⃣ Cancelar")
 
+def _nombre_tecnico(tel: str) -> str:
+    try:
+        for t in cargar_proveedores_aprobados("técnico"):
+            if t.get("telefono") == tel:
+                return t.get("nombre", "Técnico")
+    except Exception:
+        pass
+    return "Técnico"
+
+
 async def _asignar_tec(numero_tec):
     """Primer técnico que responde ACEPTO se lleva el servicio."""
     for cli, reg in list(tec_pendientes.items()):
         if not reg.get("tomado") and numero_tec in reg.get("tecnicos", []):
             reg["tomado"] = True
             d = reg["datos"]
+            try:
+                _tecnico = {"nombre": _nombre_tecnico(numero_tec), "telefono": numero_tec, "placa": ""}
+                await sheets_evento("upsert_servicio",
+                    armar_sheets_servicio(cli, "SERVICIO_TECNICO", d, "ASIGNADO", _tecnico))
+            except Exception as e:
+                print(f"[TEC->SHEETS] {e}", flush=True)
             await enviar_mensaje(numero_tec,
                 "✅ *¡Servicio asignado a ti!* 🦅\n\n"
                 f"🛠️ {d.get('tec_oficio','')}\n"
@@ -4100,6 +4116,18 @@ async def _tec_finalizar(numero: str, sesion: dict):
     """Registra la solicitud y la ofrece a los técnicos aprobados (flujo ACEPTO)."""
     d = sesion["datos"]
     registrar_servicio("SERVICIO_TECNICO", d, numero)
+
+    # Espejar la solicitud técnica en el Sheet (pestaña SERVICIOS)
+    d["recojo_texto"] = d.get("tec_direccion", "")
+    d["observacion_sheets"] = " · ".join(x for x in [
+        d.get("tec_oficio", ""), d.get("tec_problema", ""),
+        (f"para: {d.get('tec_cuando','')}" if d.get("tec_cuando") else "")
+    ] if x)
+    try:
+        await sheets_evento("upsert_servicio",
+            armar_sheets_servicio(numero, "SERVICIO_TECNICO", d, "PENDIENTE_TECNICO"))
+    except Exception as e:
+        print(f"[TEC->SHEETS] {e}", flush=True)
 
     oficio = d.get("tec_oficio", "")
     tecnicos = cargar_proveedores_aprobados("técnico")
