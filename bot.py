@@ -220,6 +220,15 @@ S_TEC_DIRECCION      = "TEC_DIRECCION"     # dónde es el servicio
 S_TEC_CUANDO         = "TEC_CUANDO"        # cuándo lo necesita
 S_TEC_CONFIRMAR      = "TEC_CONFIRMAR"     # resumen y confirmación
 S_TEC_NOMBRE         = "TEC_NOMBRE"        # nombre del cliente (si falta)
+
+# ── Belleza y Cuidado (lado cliente) ─────────────────────────────────────────
+S_BEL_SERVICIO       = "BEL_SERVICIO"      # elige el servicio de belleza
+S_BEL_MODALIDAD      = "BEL_MODALIDAD"     # a domicilio / voy al local del especialista
+S_BEL_DETALLE        = "BEL_DETALLE"       # describe qué necesita
+S_BEL_DIRECCION      = "BEL_DIRECCION"     # dónde es el servicio (si es a domicilio)
+S_BEL_CUANDO         = "BEL_CUANDO"        # cuándo lo necesita
+S_BEL_NOMBRE         = "BEL_NOMBRE"        # nombre del cliente (si falta)
+S_BEL_CONFIRMAR      = "BEL_CONFIRMAR"     # resumen y confirmación
 # ── Mapa estado → estado anterior ────────────────────────────────────────────
 ESTADO_ANTERIOR = {
     S_NOMBRE:               S_MENU,
@@ -383,6 +392,7 @@ clases_tomadas: set[str] = set()
 # Servicios pendientes de aceptación {numero_cliente: datos_servicio}
 servicios_pendientes: dict[str, dict] = {}
 tec_pendientes: dict[str, dict] = {}   # numero_cliente -> {datos, tecnicos, tomado}
+bel_pendientes: dict[str, dict] = {}   # numero_cliente -> {datos, especialistas, tomado}
 # Servicios ya tomados para evitar doble asignación
 servicios_tomados: set[str] = set()
 calificacion_pendiente: set[str] = set()  # números con calificación ya programada
@@ -661,8 +671,9 @@ _Red inteligente de servicios locales en Barranca_
 3️⃣ 🛡️ Seguridad & Saneamiento
 4️⃣ 📚 Educación
 5️⃣ 🔧 Servicios Técnicos
-6️⃣ 🏗️ Estructuras & Calaminas (INCAMORE)
-7️⃣ 🤝 Únete / Trabaja con nosotros
+6️⃣ 💅 Belleza y Cuidado
+7️⃣ 🏗️ Estructuras & Calaminas (INCAMORE)
+8️⃣ 🤝 Únete / Trabaja con nosotros
 0️⃣ Salir
 
 O escribe tu consulta libremente 💬"""
@@ -2109,6 +2120,14 @@ PALABRAS_INTENCION = {
         "portón", "estructura metalica", "estructura metálica", "metalmecanica", "metalmecánica",
         "bisagra", "vizagra", "baranda", "reparar", "arreglar", "malogr", "averi", "tecnico", "técnico"
     ],
+    "BELLEZA": [
+        "uña", "uñas", "manicure", "pedicure", "esmaltado", "nail", "podolog", "callos",
+        "peluqueria", "peluquería", "peluquero", "corte de cabello", "corte de pelo", "peinado",
+        "tinte", "mechas", "barberia", "barbería", "barbero", "barba", "afeitado", "fade",
+        "maquillaje", "makeup", "make up", "depilacion", "depilación", "depilar", "cera",
+        "estetica", "estética", "facial", "limpieza facial", "uñas acrilicas", "uñas acrílicas",
+        "salon de belleza", "salón de belleza", "belleza", "spa", "pestañas", "cejas"
+    ],
 }
 
 
@@ -2142,8 +2161,9 @@ async def clasificar_intencion(texto: str) -> str:
         "SEGURIDAD = extintores, fumigación o control de plagas, señalización, defensa civil, saneamiento.\n"
         "EDUCACION = clases particulares, reforzamiento escolar, profesor de matemática u otra materia, tutorías, apoyo con tareas o exámenes.\n"
         "SERVICIOS_TECNICOS = soporte técnico de PC/laptop/celular/impresora/red/cámaras, gasfitería, cerrajería, electricista, reparación de electrodomésticos, arreglos del hogar o negocio.\n"
+        "BELLEZA = servicios de belleza y cuidado personal: uñas/manicure/pedicure, podología, peluquería, barbería, maquillaje, depilación, estética facial.\n"
         "CONSULTA = saludos, preguntas generales, dudas, o cualquier cosa que no encaje claramente en las anteriores.\n"
-        "Responde únicamente una de estas palabras: TRANSPORTE, GASTRONOMIA, SEGURIDAD, EDUCACION, SERVICIOS_TECNICOS, CONSULTA."
+        "Responde únicamente una de estas palabras: TRANSPORTE, GASTRONOMIA, SEGURIDAD, EDUCACION, SERVICIOS_TECNICOS, BELLEZA, CONSULTA."
     )
 
     def _groq():
@@ -2157,7 +2177,7 @@ async def clasificar_intencion(texto: str) -> str:
     try:
         completion = await asyncio.wait_for(asyncio.to_thread(_groq), timeout=3.0)
         raw = (completion.choices[0].message.content or "").strip().upper()
-        for cat in ("TRANSPORTE", "GASTRONOMIA", "SEGURIDAD", "EDUCACION", "SERVICIOS_TECNICOS", "CONSULTA"):
+        for cat in ("TRANSPORTE", "GASTRONOMIA", "SEGURIDAD", "EDUCACION", "SERVICIOS_TECNICOS", "BELLEZA", "CONSULTA"):
             if cat in raw:
                 return cat
     except (asyncio.TimeoutError, Exception):
@@ -2188,6 +2208,47 @@ MSG_TEC_MENU = (
     "0️⃣ Volver al menú\n\n"
     "_El técnico coordina el precio contigo según el trabajo._"
 )
+
+
+# ── Belleza y Cuidado: catálogo de servicios ─────────────────────────────────
+BEL_SERVICIOS = {
+    "1": "Uñas / Manicure y Pedicure",
+    "2": "Podología",
+    "3": "Peluquería (corte, peinado, tinte)",
+    "4": "Barbería",
+    "5": "Maquillaje",
+    "6": "Depilación",
+    "7": "Estética facial / Limpieza facial",
+}
+
+MSG_BEL_MENU = (
+    "💅 *Belleza y Cuidado — El Cuervo*\n"
+    "Especialistas verificados a domicilio o en su local.\n\n"
+    "¿Qué servicio necesitas?\n"
+    "1️⃣ 💅 Uñas / Manicure y Pedicure\n"
+    "2️⃣ 🦶 Podología\n"
+    "3️⃣ ✂️ Peluquería (corte, peinado, tinte)\n"
+    "4️⃣ 💈 Barbería\n"
+    "5️⃣ 💄 Maquillaje\n"
+    "6️⃣ 🪒 Depilación\n"
+    "7️⃣ ✨ Estética facial / Limpieza facial\n"
+    "0️⃣ Volver al menú\n\n"
+    "_El especialista coordina el precio contigo según el servicio._"
+)
+
+# Servicios que SOLO se atienden en el local del especialista (vacío = siempre preguntar modalidad).
+BEL_SOLO_LOCAL = set()
+
+# Keywords para emparejar el servicio pedido con lo que el especialista declaró al registrarse.
+BEL_KEYWORDS = {
+    "1": ["uña", "uñas", "manicure", "pedicure", "esmaltado", "nail", "manos"],
+    "2": ["podolog", "pies", "callos", "uñero", "uña encarnada", "uñas encarnadas"],
+    "3": ["peluquer", "cabello", "pelo", "corte", "peinado", "tinte", "mechas", "estilista", "salon", "salón"],
+    "4": ["barber", "barba", "afeitado", "fade", "caballero"],
+    "5": ["maquillaje", "makeup", "make up", "novia", "social"],
+    "6": ["depilac", "cera", "depilad"],
+    "7": ["estética", "estetica", "facial", "limpieza facial", "tratamiento facial", "piel", "cejas", "pestañas"],
+}
 
 
 async def extraer_datos_transporte(texto: str) -> dict:
@@ -2519,6 +2580,11 @@ async def enrutar_categoria(numero: str, sesion: dict, categoria: str, prefijo: 
         sesion["estado"] = S_TEC_OFICIO
         sesion["datos"] = {"servicio": "SERVICIO_TECNICO"}
         await enviar_mensaje(numero, prefijo + MSG_TEC_MENU)
+        return True
+    if categoria == "BELLEZA":
+        sesion["estado"] = S_BEL_SERVICIO
+        sesion["datos"] = {"servicio": "BELLEZA"}
+        await enviar_mensaje(numero, prefijo + MSG_BEL_MENU)
         return True
     return False
 
@@ -3453,6 +3519,7 @@ CATEGORIA_SERVICIO = {
     "TAXI": "Transporte", "COLECTIVO": "Transporte", "ENCOMIENDA": "Transporte",
     "TURISMO": "Turismo", "EDUCACION": "Educación", "SEGURIDAD": "Seguridad",
     "SERVICIO_TECNICO": "Servicios Técnicos",
+    "BELLEZA": "Belleza y Cuidado",
 }
 
 
@@ -4189,6 +4256,204 @@ async def _tec_finalizar(numero: str, sesion: dict):
         "Estamos contactando a un técnico disponible. En breve te confirmamos. 🦅\n\n"
         "Escribe *menu* para volver al inicio.")
 
+
+# ==========================================================================
+#  MÓDULO BELLEZA Y CUIDADO — LADO CLIENTE
+#  Espeja el patrón de Servicios Técnicos: flujo guiado + texto libre (IA) +
+#  despacho ACEPTO (primer especialista que acepta se lleva el contacto).
+# ==========================================================================
+
+async def extraer_datos_belleza(texto: str) -> dict:
+    """Agente (Claude): detecta el servicio de belleza y un detalle desde texto libre."""
+    sys = (
+        "Extrae datos de una solicitud de servicio de belleza/cuidado personal en Barranca, Perú. "
+        "Responde SOLO un JSON válido, sin markdown, con estas claves (null si no aplica):\n"
+        '{"servicio": "unas"|"podologia"|"peluqueria"|"barberia"|"maquillaje"|"depilacion"|"estetica"|null, "detalle": string|null}\n'
+        "unas=uñas/manicure/pedicure/esmaltado. podologia=pies/callos/uñas encarnadas. "
+        "peluqueria=corte/peinado/tinte/mechas de cabello (mujer u hombre general). "
+        "barberia=corte y arreglo de barba para caballeros, fade. maquillaje=maquillaje social/novia. "
+        "depilacion=depilación con cera u otros. estetica=limpieza/tratamiento facial, cejas, pestañas. "
+        "detalle: breve descripción de lo que necesita."
+    )
+    p = await _extraer_json_claude(texto, sys, "BEL")
+    out = {}
+    mapa = {"unas": "1", "podologia": "2", "peluqueria": "3", "barberia": "4",
+            "maquillaje": "5", "depilacion": "6", "estetica": "7"}
+    s = (p.get("servicio") or "").lower()
+    if s in mapa:
+        out["servicio_idx"] = mapa[s]
+    if isinstance(p.get("detalle"), str) and p["detalle"].strip():
+        out["detalle"] = p["detalle"].strip()[:200]
+    return out
+
+
+def _bel_resumen_entendido(d):
+    return ("💅 *Entendí:* " + d["bel_servicio"] + ".\nCompletamos lo que falta 👇") if d.get("bel_servicio") else ""
+
+
+def _belleza_cubre_servicio(prov: dict, idx: str) -> bool:
+    """¿El especialista cubre ese servicio? Se basa en lo que describió al registrarse."""
+    kws = BEL_KEYWORDS.get(idx, [])
+    if not kws:
+        return True  # servicio no reconocido -> no filtrar (mejor avisar a todos)
+    texto = " ".join(str(prov.get(k, "")) for k in ("detalle", "negocio", "nombre", "tipo")).lower()
+    return any(k in texto for k in kws)
+
+
+def _nombre_especialista(tel: str) -> str:
+    try:
+        for e in cargar_proveedores_aprobados("belleza"):
+            if e.get("telefono") == tel:
+                return e.get("nombre", "Especialista")
+    except Exception:
+        pass
+    return "Especialista"
+
+
+async def _bel_pedir_modalidad(numero, sesion):
+    """Pregunta si el servicio es a domicilio o en el local del especialista."""
+    datos = sesion["datos"]
+    if datos.get("bel_servicio_idx") in BEL_SOLO_LOCAL:
+        datos["bel_modalidad"] = "En el local del especialista"
+        datos["bel_direccion"] = "Cliente acude al local del especialista (coordina al contacto)"
+        sesion["estado"] = S_BEL_DETALLE
+        await enviar_mensaje(numero,
+            "💇 Cuéntame, ¿qué necesitas exactamente? _(Ej: corte y barba, uñas en gel rojas)_")
+        return
+    sesion["estado"] = S_BEL_MODALIDAD
+    await enviar_mensaje(numero,
+        "💅 *¿Cómo prefieres el servicio?*\n\n"
+        "1️⃣ Que el especialista vaya a *tu domicilio* 🏠\n"
+        "2️⃣ *Tú vas al local* del especialista 💈\n"
+        "_El especialista coordina el precio contigo._")
+
+
+async def _bel_mostrar_confirmacion(numero, sesion):
+    datos = sesion["datos"]
+    sesion["estado"] = S_BEL_CONFIRMAR
+    await enviar_mensaje(numero,
+        "📋 *Confirma tu solicitud:*\n\n"
+        f"💅 {datos.get('bel_servicio','')}\n"
+        f"👤 {datos.get('nombre','')}\n"
+        f"📝 {datos.get('bel_detalle','')}\n"
+        f"📍 {datos.get('bel_direccion','')}\n"
+        f"🕒 {datos.get('bel_cuando','')}\n\n"
+        "_El especialista coordinará el precio contigo según el servicio._\n\n"
+        "1️⃣ Confirmar y enviar\n"
+        "2️⃣ Cancelar")
+
+
+async def _bel_entrar_texto_libre(numero, sesion, texto):
+    e = await extraer_datos_belleza(texto)
+    datos = {"servicio": "BELLEZA"}
+    if e.get("servicio_idx") in BEL_SERVICIOS:
+        datos["bel_servicio_idx"] = e["servicio_idx"]
+        datos["bel_servicio"] = BEL_SERVICIOS[e["servicio_idx"]]
+    det = e.get("detalle") or (texto or "").strip()
+    if len(det) >= 4:
+        datos["bel_detalle"] = det
+    sesion["datos"] = datos
+    resumen = _bel_resumen_entendido(datos)
+    if resumen:
+        await enviar_mensaje(numero, resumen)
+    if datos.get("bel_servicio"):
+        await _bel_pedir_modalidad(numero, sesion)
+    else:
+        sesion["estado"] = S_BEL_SERVICIO
+        await enviar_mensaje(numero, "💅 Entendido. Te llevo a *Belleza y Cuidado*.\n\n" + MSG_BEL_MENU)
+
+
+async def _asignar_bel(numero_bel):
+    """Primer especialista que responde ACEPTO se lleva el servicio."""
+    for cli, reg in list(bel_pendientes.items()):
+        if not reg.get("tomado") and numero_bel in reg.get("especialistas", []):
+            reg["tomado"] = True
+            d = reg["datos"]
+            try:
+                _esp = {"nombre": _nombre_especialista(numero_bel), "telefono": numero_bel, "placa": ""}
+                await sheets_evento("upsert_servicio",
+                    armar_sheets_servicio(cli, "BELLEZA", d, "ASIGNADO", _esp))
+            except Exception as e:
+                print(f"[BEL->SHEETS] {e}", flush=True)
+            await enviar_mensaje(numero_bel,
+                "✅ *¡Servicio asignado a ti!* 🦅\n\n"
+                f"💅 {d.get('bel_servicio','')}\n"
+                f"👤 {d.get('nombre','(cliente)')}\n"
+                f"📝 {d.get('bel_detalle','')}\n"
+                f"📍 {d.get('bel_direccion','')}\n"
+                f"🕒 {d.get('bel_cuando','')}\n"
+                f"📱 Contacto del cliente: +{cli}\n\n"
+                "_Comunícate con el cliente para coordinar el servicio y el precio._")
+            await enviar_mensaje(cli,
+                "✅ *¡Buenas noticias!* Un especialista tomó tu solicitud y te contactará en breve para coordinar. 🦅")
+            for otro in reg.get("especialistas", []):
+                if otro != numero_bel:
+                    await enviar_mensaje(otro,
+                        "ℹ️ Esa solicitud de belleza ya fue tomada por otro especialista. ¡Gracias por responder! 🦅")
+            bel_pendientes.pop(cli, None)
+            return True
+    return False
+
+
+async def _bel_finalizar(numero: str, sesion: dict):
+    """Registra la solicitud y la ofrece a los especialistas aprobados (flujo ACEPTO)."""
+    d = sesion["datos"]
+
+    # Espejar la solicitud en el Sheet (pestaña SERVICIOS)
+    d["recojo_texto"] = d.get("bel_direccion", "")
+    d["observacion_sheets"] = " · ".join(x for x in [
+        d.get("bel_servicio", ""), d.get("bel_detalle", ""),
+        (f"para: {d.get('bel_cuando','')}" if d.get("bel_cuando") else "")
+    ] if x)
+
+    registrar_servicio("BELLEZA", d, numero)
+    try:
+        await sheets_evento("upsert_servicio",
+            armar_sheets_servicio(numero, "BELLEZA", d, "PENDIENTE_ESPECIALISTA"))
+    except Exception as e:
+        print(f"[BEL->SHEETS] {e}", flush=True)
+
+    idx = d.get("bel_servicio_idx", "")
+    especialistas = cargar_proveedores_aprobados("belleza")
+    coincidentes = [e for e in especialistas if _belleza_cubre_servicio(e, idx)]
+    tels = list(dict.fromkeys([e.get("telefono", "") for e in coincidentes if e.get("telefono")]))
+
+    resumen = (
+        "💅 *Nueva solicitud de belleza y cuidado*\n\n"
+        f"💅 {d.get('bel_servicio','')}\n"
+        + (f"👤 Cliente: {d['nombre']}\n" if d.get('nombre') else "")
+        + f"📝 {d.get('bel_detalle','')}\n"
+        f"📍 {d.get('bel_direccion','(no indicada)')}\n"
+        f"🕒 {d.get('bel_cuando','(a coordinar)')}\n"
+    )
+
+    if tels:
+        bel_pendientes[numero] = {"datos": dict(d), "especialistas": tels, "tomado": False, "creado": time.time()}
+        aviso = resumen + ("\n👉 Responde *ACEPTO* para tomar este servicio.\n"
+                           "_(El primero en aceptar recibe el contacto del cliente.)_")
+        cliente_str = _limpiar_param_template(f"{d.get('nombre','Cliente')} | belleza")
+        detalle_corto = _limpiar_param_template(f"{d.get('bel_servicio','')} | {str(d.get('bel_detalle',''))[:40]}")
+        await asyncio.gather(*[
+            notificar_conductor_inteligente(t, aviso, "SERVICIO", cliente_str, detalle_corto, numero)
+            for t in tels
+        ], return_exceptions=True)
+        print(f"[BEL] solicitud ofrecida a {len(tels)} especialista(s) aprobado(s)", flush=True)
+    else:
+        admin = os.getenv("ADMIN_WHATSAPP", "").strip()
+        if admin:
+            await enviar_mensaje(admin,
+                "⚠️ *Solicitud sin especialista de ese servicio*\n\n" + resumen +
+                f"📱 Contacto: +{numero}\n\n"
+                f"_No hay un especialista registrado para *{d.get('bel_servicio','')}*. Coordínalo tú o registra a alguien de ese rubro._")
+
+    sesion["estado"] = S_MENU
+    sesion["datos"] = {}
+    await enviar_mensaje(numero,
+        "✅ *¡Solicitud recibida!*\n\n"
+        "Estamos contactando a un especialista disponible. En breve te confirmamos. 🦅\n\n"
+        "Escribe *menu* para volver al inicio.")
+
+
 import re  # (calaminas)
 
 # ==========================================================================
@@ -4853,6 +5118,12 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         await _asignar_tec(numero)
         return
 
+    # ── Especialista de belleza responde ACEPTO ──────────────────────────────
+    if _txt_ac in {"acepto", "acepta", "lo tomo", "yo voy", "tomo"} and any(
+            (not r.get("tomado")) and numero in r.get("especialistas", []) for r in bel_pendientes.values()):
+        await _asignar_bel(numero)
+        return
+
     # ── Conductor responde ACEPTO (con sinónimos) ────────────────────────────
     SINONIMOS_ACEPTO = {"listo","si","sí","ok","dale","voy","ya","tomo","vamos"}
     txt_norm = texto.strip().lower()
@@ -5394,8 +5665,10 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         elif texto == "5":
             await enrutar_categoria(numero, sesion, "SERVICIOS_TECNICOS")
         elif texto == "6":
-            await iniciar_calaminas(numero, sesion)
+            await enrutar_categoria(numero, sesion, "BELLEZA")
         elif texto == "7":
+            await iniciar_calaminas(numero, sesion)
+        elif texto == "8":
             await iniciar_unete(numero, sesion)
         elif texto == "0":
             sesiones.pop(numero, None)
@@ -5443,6 +5716,8 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                         prefijo="📚 ¡Perfecto! Te llevo a *Educación*.\n\n")
             elif categoria == "SERVICIOS_TECNICOS":
                 await _tec_entrar_texto_libre(numero, sesion, texto)
+            elif categoria == "BELLEZA":
+                await _bel_entrar_texto_libre(numero, sesion, texto)
             else:
                 resp = await respuesta_ia(numero, texto)
                 datos["ultima_consulta"] = texto
@@ -5639,6 +5914,92 @@ async def procesar(numero: str, tipo: str, contenido: dict):
     elif estado == S_TEC_CONFIRMAR:
         if texto == "1" or texto.strip().lower() in ("confirmo", "si", "sí", "ok"):
             await _tec_finalizar(numero, sesion)
+        elif texto == "2" or texto.strip().lower() in ("no", "cancelar"):
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            await enviar_mensaje(numero, "❌ Solicitud cancelada.\n\n" + MSG_BIENVENIDA)
+        else:
+            await enviar_mensaje(numero, "Responde *1* para confirmar o *2* para cancelar.")
+
+    # ══ BELLEZA Y CUIDADO (El Cuervo) ════════════════════════════════════
+    elif estado == S_BEL_SERVICIO:
+        if texto == "0":
+            sesiones[numero] = {"estado": S_MENU, "datos": {}}
+            await enviar_mensaje(numero, MSG_BIENVENIDA)
+            return
+        if texto not in BEL_SERVICIOS:
+            await enviar_mensaje(numero, "Elige una opción del *1* al *7*, o *0* para volver.")
+            return
+        datos["bel_servicio_idx"] = texto
+        datos["bel_servicio"] = BEL_SERVICIOS[texto]
+        await _bel_pedir_modalidad(numero, sesion)
+
+    elif estado == S_BEL_MODALIDAD:
+        if texto == "1":
+            datos["bel_modalidad"] = "A domicilio"
+            sesion["estado"] = S_BEL_DETALLE
+            await enviar_mensaje(numero,
+                "💇 Cuéntame, ¿qué necesitas exactamente? _(Ej: corte y barba, uñas en gel rojas)_")
+        elif texto == "2":
+            datos["bel_modalidad"] = "En el local del especialista"
+            datos["bel_direccion"] = "Cliente acude al local del especialista (coordina al contacto)"
+            sesion["estado"] = S_BEL_DETALLE
+            await enviar_mensaje(numero,
+                "💇 Cuéntame, ¿qué necesitas exactamente? _(Ej: corte y barba, uñas en gel rojas)_")
+        else:
+            await enviar_mensaje(numero,
+                "Responde *1* (van a tu domicilio) o *2* (vas al local del especialista).")
+
+    elif estado == S_BEL_DETALLE:
+        if len((texto or "").strip()) < 4:
+            await enviar_mensaje(numero, "Por favor descríbeme un poco más qué necesitas.")
+            return
+        datos["bel_detalle"] = texto.strip()
+        if datos.get("bel_direccion"):
+            # Ya vamos a su local: saltamos dirección
+            sesion["estado"] = S_BEL_CUANDO
+            await enviar_mensaje(numero,
+                "🕒 ¿Para cuándo lo necesitas?\n_(Ej: hoy en la tarde, mañana 10am, este sábado)_")
+        else:
+            sesion["estado"] = S_BEL_DIRECCION
+            await enviar_mensaje(numero,
+                "📍 ¿Dónde sería el servicio?\n• Comparte tu ubicación 📌\n• O escribe la dirección")
+
+    elif estado == S_BEL_DIRECCION:
+        if tipo == "location" and isinstance(contenido, dict):
+            datos["bel_direccion"] = await direccion_desde_gps(contenido.get("latitude"), contenido.get("longitude"))
+        elif lat and lng:
+            datos["bel_direccion"] = await direccion_desde_gps(lat, lng)
+        elif (texto or "").strip():
+            datos["bel_direccion"] = await limpiar_direccion(texto)
+        else:
+            await enviar_mensaje(numero, "Por favor escribe la dirección o comparte tu ubicación 📌.")
+            return
+        sesion["estado"] = S_BEL_CUANDO
+        await enviar_mensaje(numero,
+            "🕒 ¿Para cuándo lo necesitas?\n_(Ej: hoy en la tarde, mañana 10am, este sábado)_")
+
+    elif estado == S_BEL_CUANDO:
+        if len((texto or "").strip()) < 2:
+            await enviar_mensaje(numero, "Cuéntame para cuándo lo necesitas.")
+            return
+        datos["bel_cuando"] = texto.strip()
+        if not datos.get("nombre"):
+            sesion["estado"] = S_BEL_NOMBRE
+            await enviar_mensaje(numero, "🙋 ¿A nombre de quién registramos la solicitud?")
+            return
+        await _bel_mostrar_confirmacion(numero, sesion)
+
+    elif estado == S_BEL_NOMBRE:
+        nom = (texto or "").strip()
+        if len(nom) < 2:
+            await enviar_mensaje(numero, "Escríbeme tu nombre por favor 🙂")
+            return
+        datos["nombre"] = normalizar_nombre_persona(nom)
+        await _bel_mostrar_confirmacion(numero, sesion)
+
+    elif estado == S_BEL_CONFIRMAR:
+        if texto == "1" or texto.strip().lower() in ("confirmo", "si", "sí", "ok"):
+            await _bel_finalizar(numero, sesion)
         elif texto == "2" or texto.strip().lower() in ("no", "cancelar"):
             sesiones[numero] = {"estado": S_MENU, "datos": {}}
             await enviar_mensaje(numero, "❌ Solicitud cancelada.\n\n" + MSG_BIENVENIDA)
