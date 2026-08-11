@@ -942,7 +942,8 @@ async def enviar_template_solicitud(to: str, p1: str, p2: str, p3: str, p4: str)
     """
     Envía la plantilla aprobada de nueva solicitud de servicio.
     Plantilla Meta: nueva_solicitud_servicio_v2  (idioma es_PE)
-    Variables: {{1}}=tipo  {{2}}=cliente  {{3}}=detalle  {{4}}=numero cliente
+    Variables: {{1}}=tipo  {{2}}=cliente(incluye telefono)  {{3}}=detalle
+    (el numero del cliente ya va dentro de {{2}}, por eso son 3 params, no 4)
     Se usa cuando la ventana de 24h del conductor está cerrada, para garantizar entrega.
     """
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
@@ -963,7 +964,6 @@ async def enviar_template_solicitud(to: str, p1: str, p2: str, p3: str, p4: str)
                     {"type": "text", "text": _limpiar_param_template(p1)},
                     {"type": "text", "text": _limpiar_param_template(p2)},
                     {"type": "text", "text": _limpiar_param_template(p3)},
-                    {"type": "text", "text": _limpiar_param_template(p4)},
                 ]
             }]
         }
