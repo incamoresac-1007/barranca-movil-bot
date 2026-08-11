@@ -1765,9 +1765,9 @@ async def verificar_activos_y_alertar_operador():
             return
 
         mensaje = (
-            "🚨 *ALERTA OPERATIVA*\\n\\n"
-            "Aún no hay conductores *ACTIVO* en El Cuervo.\\n\\n"
-            "Hora de validación: 08:00 a. m.\\n\\n"
+            "🚨 *ALERTA OPERATIVA*\n\n"
+            "Aún no hay conductores *ACTIVO* en El Cuervo.\n\n"
+            "Hora de validación: 08:00 a. m.\n\n"
             "Revisa el panel CONDUCTORES o coordina manualmente con el grupo."
         )
 
@@ -5582,6 +5582,28 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         _lineas.append("")
         _lineas.append(f"Activos ahora: *{_nact}/{len(CONDUCTORES)}*")
         await enviar_mensaje(numero, "\n".join(_lineas))
+        return
+
+    # ── OPERADOR: ACTIVAR / PAUSAR <numero> (control de conductores) ─────────
+    _pop = texto.strip().split()
+    if (OPERADOR_WA and numero == OPERADOR_WA and len(_pop) >= 2
+            and _pop[0].upper() in ("ACTIVAR", "PAUSAR", "PAUSA")):
+        _acc = _pop[0].upper()
+        _tel = "".join(_ch for _ch in _pop[1] if _ch.isdigit())
+        if _tel and not _tel.startswith("51"):
+            _tel = "51" + _tel
+        if _tel not in CONDUCTORES:
+            await enviar_mensaje(numero, f"⚠️ No encontré ese conductor ({_tel}). Escribe *ESTADO* para ver la lista con sus números.")
+            return
+        _inf = CONDUCTORES.get(_tel, {})
+        if _acc == "ACTIVAR":
+            conductores_estado[_tel] = True
+            await actualizar_estado_conductor_sheets(_tel, "ACTIVO")
+            await enviar_mensaje(numero, f"✅ *{_inf.get('nombre','')}* ({_inf.get('placa','')}) quedó *ACTIVO*. Ya recibirá servicios.")
+        else:
+            conductores_estado[_tel] = False
+            await actualizar_estado_conductor_sheets(_tel, "PAUSADO")
+            await enviar_mensaje(numero, f"⏸️ *{_inf.get('nombre','')}* ({_inf.get('placa','')}) quedó *PAUSADO*.")
         return
 
     # ── Cancelación cliente con servicio pendiente o asignado ────────────────
