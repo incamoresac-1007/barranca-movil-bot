@@ -5572,31 +5572,36 @@ async def procesar(numero: str, tipo: str, contenido: dict):
             pass
         _lineas = ["🦅 *Estado de conductores*", ""]
         _nact = 0
+        _i = 0
         for _num, _info in CONDUCTORES.items():
+            _i += 1
             _act = _num in _activos_tel
             if _act:
                 _nact += 1
             _ic = "✅" if _act else "⏸️"
             _nsv = _cont.get(str(_info.get("nombre", "")).strip().lower(), 0)
-            _lineas.append(f"{_ic} {_info.get('nombre','')} ({_info.get('placa','')}) — {_nsv} serv.")
+            _lineas.append(f"{_i}. {_ic} {_info.get('nombre','')} ({_info.get('placa','')}) — {_nsv} serv.")
         _lineas.append("")
         _lineas.append(f"Activos ahora: *{_nact}/{len(CONDUCTORES)}*")
+        _lineas.append("")
+        _lineas.append("👉 Para cambiar el estado, escribe:")
+        _lineas.append("• *1 N* → activar  (ej: 1 2)")
+        _lineas.append("• *0 N* → pausar   (ej: 0 3)")
         await enviar_mensaje(numero, "\n".join(_lineas))
         return
 
-    # ── OPERADOR: ACTIVAR / PAUSAR <numero> (control de conductores) ─────────
+    # ── OPERADOR: 1 N (activar) / 0 N (pausar) por numero de la lista ────────
     _pop = texto.strip().split()
-    if (OPERADOR_WA and numero == OPERADOR_WA and len(_pop) >= 2
-            and _pop[0].upper() in ("ACTIVAR", "PAUSAR", "PAUSA")):
-        _acc = _pop[0].upper()
-        _tel = "".join(_ch for _ch in _pop[1] if _ch.isdigit())
-        if _tel and not _tel.startswith("51"):
-            _tel = "51" + _tel
-        if _tel not in CONDUCTORES:
-            await enviar_mensaje(numero, f"⚠️ No encontré ese conductor ({_tel}). Escribe *ESTADO* para ver la lista con sus números.")
+    if (OPERADOR_WA and numero == OPERADOR_WA and len(_pop) == 2
+            and _pop[0] in ("1", "0") and _pop[1].isdigit()):
+        _nums = list(CONDUCTORES.keys())
+        _idx = int(_pop[1]) - 1
+        if _idx < 0 or _idx >= len(_nums):
+            await enviar_mensaje(numero, "⚠️ Ese numero no esta en la lista. Escribe *ESTADO* para verla.")
             return
+        _tel = _nums[_idx]
         _inf = CONDUCTORES.get(_tel, {})
-        if _acc == "ACTIVAR":
+        if _pop[0] == "1":
             conductores_estado[_tel] = True
             await actualizar_estado_conductor_sheets(_tel, "ACTIVO")
             await enviar_mensaje(numero, f"✅ *{_inf.get('nombre','')}* ({_inf.get('placa','')}) quedó *ACTIVO*. Ya recibirá servicios.")
