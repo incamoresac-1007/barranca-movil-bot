@@ -3034,56 +3034,58 @@ VIDEOS_TURISMO = {
 }
 
 
+_cache_activos = []          # último resultado bueno leído de Sheets
+_cache_activos_ts = 0.0      # marca de tiempo del último resultado bueno
+
 async def obtener_conductores_activos_desde_sheets():
     """
-    Lee la hoja CONDUCTORES desde Apps Script.
-    Solo devuelve conductores con ESTADO = ACTIVO.
-    Google Sheets es la fuente de verdad.
+    Lee la hoja CONDUCTORES desde Apps Script (solo ESTADO = ACTIVO).
+    ROBUSTO: reintenta con más tiempo y, si Sheets falla, usa el último estado
+    bueno (caché) en vez de devolver 0 — así no reporta "sin activos" por un
+    error temporal de Google.
     """
+    global _cache_activos, _cache_activos_ts
     webhook_url = os.getenv("SHEETS_WEBHOOK_URL", "")
     if not webhook_url:
         print("[CONDUCTORES] SHEETS_WEBHOOK_URL no configurado", flush=True)
-        return []
+        return _cache_activos
 
-    payload = {
-        "action": "get_conductores_activos"
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            r = await client.post(webhook_url, json=payload)
-
-        if r.status_code >= 400:
-            print(f"[CONDUCTORES ERROR] HTTP {r.status_code}: {r.text[:300]}", flush=True)
-            return []
-
-        resp = r.json()
-
-        if not resp.get("ok"):
-            print(f"[CONDUCTORES ERROR] Respuesta inválida: {resp}", flush=True)
-            return []
-
-        conductores = resp.get("conductores", []) or []
-        print(f"[CONDUCTORES] activos desde Sheets: {len(conductores)}", flush=True)
-
-        activos = []
-        for c in conductores:
-            telefono = str(c.get("telefono", "")).strip()
-            if not telefono:
+    payload = {"action": "get_conductores_activos"}
+    _ultimo_err = ""
+    for _intento, _to in enumerate((12, 20), 1):
+        try:
+            async with httpx.AsyncClient(timeout=_to, follow_redirects=True) as client:
+                r = await client.post(webhook_url, json=payload)
+            if r.status_code >= 400:
+                _ultimo_err = f"HTTP {r.status_code}"
                 continue
+            resp = r.json()
+            if not resp.get("ok"):
+                _ultimo_err = f"resp invalida: {resp}"
+                continue
+            conductores = resp.get("conductores", []) or []
+            activos = []
+            for c in conductores:
+                telefono = str(c.get("telefono", "")).strip()
+                if not telefono:
+                    continue
+                activos.append({
+                    "telefono": telefono,
+                    "nombre": c.get("nombre", ""),
+                    "placa": c.get("placa", ""),
+                    "estado": c.get("estado", "ACTIVO"),
+                })
+            _cache_activos = activos
+            _cache_activos_ts = time.time()
+            print(f"[CONDUCTORES] activos desde Sheets: {len(activos)} (intento {_intento})", flush=True)
+            return activos
+        except Exception as e:
+            _ultimo_err = str(e)
+            continue
 
-            activos.append({
-                "telefono": telefono,
-                "nombre": c.get("nombre", ""),
-                "placa": c.get("placa", ""),
-                "estado": c.get("estado", "ACTIVO")
-            })
-
-        return activos
-
-    except Exception as e:
-        print(f"[CONDUCTORES ERROR] No se pudo consultar Sheets: {e}", flush=True)
-        return []
+    # Todos los intentos fallaron: usar ultimo estado bueno (no reportar 0 falso)
+    print(f"[CONDUCTORES ERROR] Sheets no respondio ({_ultimo_err}); uso cache con {len(_cache_activos)} activos", flush=True)
+    return _cache_activos
 
 
 async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "TAXI"):
