@@ -5549,6 +5549,41 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 f"• *PAUSAR* / *ACTIVAR* — cambiar disponibilidad")
             return
 
+    if OPERADOR_WA and numero == OPERADOR_WA and texto.strip().upper() in ("ESTADO", "ACTIVOS", "CONDUCTORES"):
+        _activos_tel = set()
+        try:
+            for _c in (await obtener_conductores_activos_desde_sheets()):
+                _t = str(_c.get("telefono", "")).strip().replace("+", "")
+                if _t and not _t.startswith("51"):
+                    _t = "51" + _t
+                if _t:
+                    _activos_tel.add(_t)
+        except Exception:
+            pass
+        _cont = {}
+        try:
+            if os.path.exists(SERVICIOS_FILE):
+                with open(SERVICIOS_FILE, "r", encoding="utf-8") as _f:
+                    for _s in (json.load(_f) or []):
+                        _p = str(_s.get("proveedor", "")).strip().lower()
+                        if _p:
+                            _cont[_p] = _cont.get(_p, 0) + 1
+        except Exception:
+            pass
+        _lineas = ["🦅 *Estado de conductores*", ""]
+        _nact = 0
+        for _num, _info in CONDUCTORES.items():
+            _act = _num in _activos_tel
+            if _act:
+                _nact += 1
+            _ic = "✅" if _act else "⏸️"
+            _nsv = _cont.get(str(_info.get("nombre", "")).strip().lower(), 0)
+            _lineas.append(f"{_ic} {_info.get('nombre','')} ({_info.get('placa','')}) — {_nsv} serv.")
+        _lineas.append("")
+        _lineas.append(f"Activos ahora: *{_nact}/{len(CONDUCTORES)}*")
+        await enviar_mensaje(numero, "\n".join(_lineas))
+        return
+
     # ── Cancelación cliente con servicio pendiente o asignado ────────────────
     if texto.upper() == "CANCELAR":
         if numero in servicios_pendientes:
@@ -8322,9 +8357,9 @@ function render(d){
   $('#prov').innerHTML = pv;
 
   // Conductores
-  let cd='<table><tr><th>Conductor</th><th>Placa</th><th>Estado</th></tr>';
+  let cd='<table><tr><th>Conductor</th><th>Placa</th><th>Estado</th><th>Servicios</th></tr>';
   d.conductores.forEach(c=>{ let e=c.en_viaje?'<span class="badge bv">En viaje</span>':(c.activo?'<span class="badge bo">Activo</span>':'<span class="badge" style="background:#eef0f4;color:#9a9db0">Pausado</span>');
-    cd+=`<tr><td>${c.nombre}</td><td>${c.placa}</td><td>${e}</td></tr>`; });
+    cd+=`<tr><td>${c.nombre}</td><td>${c.placa}</td><td>${e}</td><td><b>${c.servicios||0}</b></td></tr>`; });
   cd+='</table>'; $('#cond').innerHTML=cd;
 
   // Servicios Técnicos (proveedores tipo técnico / especialista)
@@ -8407,6 +8442,17 @@ async def api_dashboard(clave: str = ""):
             print(f"[DASHBOARD] no se pudo leer conductores de Sheets: {e}", flush=True)
             sheet_ok = False
 
+    _serv_cont = {}
+    try:
+        if os.path.exists(SERVICIOS_FILE):
+            with open(SERVICIOS_FILE, "r", encoding="utf-8") as _f:
+                for _s in (json.load(_f) or []):
+                    _p = str(_s.get("proveedor", "")).strip().lower()
+                    if _p:
+                        _serv_cont[_p] = _serv_cont.get(_p, 0) + 1
+    except Exception:
+        _serv_cont = {}
+
     conductores = []
     activos = 0
     for num, info in CONDUCTORES.items():
@@ -8419,6 +8465,7 @@ async def api_dashboard(clave: str = ""):
             "telefono": num,
             "activo": bool(estado_act),
             "en_viaje": num in viajes_activos,
+            "servicios": _serv_cont.get(str(info.get("nombre", "")).strip().lower(), 0),
         })
 
     # Profesores
