@@ -3052,7 +3052,7 @@ async def obtener_conductores_activos_desde_sheets():
 
     payload = {"action": "get_conductores_activos"}
     _ultimo_err = ""
-    for _intento, _to in enumerate((12, 20), 1):
+    for _intento, _to in enumerate((10, 16, 24), 1):
         try:
             async with httpx.AsyncClient(timeout=_to, follow_redirects=True) as client:
                 r = await client.post(webhook_url, json=payload)
