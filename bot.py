@@ -3036,6 +3036,7 @@ VIDEOS_TURISMO = {
 
 _cache_activos = []          # último resultado bueno leído de Sheets
 _cache_activos_ts = 0.0      # marca de tiempo del último resultado bueno
+_op_ctx = {}                 # contexto del operador para 1 N / 0 N: ("conductores"|"proveedores", [ids])
 
 async def obtener_conductores_activos_desde_sheets():
     """
@@ -3648,6 +3649,33 @@ def actualizar_estado_proveedor(pid: str, nuevo_estado: str):
         return None
 
 
+def set_proveedor_disponible(pid: str, disponible: bool):
+    """Marca un proveedor como disponible (activo) o pausado, por id. Devuelve el registro o None."""
+    try:
+        if not os.path.exists(PROVEEDORES_FILE):
+            return None
+        with open(PROVEEDORES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f) or []
+        encontrado = None
+        for r in data:
+            if str(r.get("id")) == str(pid):
+                r["disponible"] = bool(disponible)
+                r["disponible_cambiado_el"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                encontrado = r
+                break
+        if not encontrado:
+            return None
+        tmp = PROVEEDORES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, PROVEEDORES_FILE)
+        print(f"[PROVEEDOR] {pid} disponible={disponible}", flush=True)
+        return encontrado
+    except Exception as e:
+        print(f"[PROVEEDOR ERROR] set_disponible: {e}", flush=True)
+        return None
+
+
 async def _proveedor_a_sheets(reg: dict):
     """Espeja un proveedor a la pestaña PROVEEDORES del Google Sheet (upsert por ID_PROVEEDOR)."""
     try:
@@ -3679,7 +3707,7 @@ def cargar_proveedores_aprobados(filtro_tipo: str = "") -> list:
             return []
         with open(PROVEEDORES_FILE, "r", encoding="utf-8") as f:
             data = json.load(f) or []
-        out = [r for r in data if r.get("estado") == "APROBADO"]
+        out = [r for r in data if r.get("estado") == "APROBADO" and r.get("disponible", True) is not False]
         if filtro_tipo:
             ft = filtro_tipo.lower()
             out = [r for r in out if ft in (r.get("tipo", "").lower())]
@@ -5589,21 +5617,75 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         _lineas.append("👉 Para cambiar el estado, escribe:")
         _lineas.append("• *1 N* → activar  (ej: 1 2)")
         _lineas.append("• *0 N* → pausar   (ej: 0 3)")
+        _op_ctx[numero] = ("conductores", None)
         await enviar_mensaje(numero, "\n".join(_lineas))
         return
 
-    # ── OPERADOR: 1 N (activar) / 0 N (pausar) por numero de la lista ────────
+    # ── OPERADOR: PROVEEDORES [rubro] → lista numerada con su disponibilidad ──
+    if (OPERADOR_WA and numero == OPERADOR_WA
+            and texto.strip().split()[0:1] == ["PROVEEDORES"] and texto.strip().upper() != "CONDUCTORES"):
+        _partes = texto.strip().split(maxsplit=1)
+        _rubro = _partes[1].strip().lower() if len(_partes) > 1 else ""
+        _provs = []
+        try:
+            if os.path.exists(PROVEEDORES_FILE):
+                with open(PROVEEDORES_FILE, "r", encoding="utf-8") as _f:
+                    for _r in (json.load(_f) or []):
+                        if _r.get("estado") != "APROBADO":
+                            continue
+                        if _rubro and _rubro not in str(_r.get("tipo", "")).lower():
+                            continue
+                        _provs.append(_r)
+        except Exception:
+            pass
+        if not _provs:
+            await enviar_mensaje(numero, f"No hay proveedores aprobados{(' de ' + _rubro) if _rubro else ''}." + "\nUsa: *PROVEEDORES* o *PROVEEDORES <rubro>* (ej: PROVEEDORES tecnicos)")
+            return
+        _op_ctx[numero] = ("proveedores", [str(_p.get("id", "")) for _p in _provs])
+        _lineas = [f"🧰 *Proveedores{(' · ' + _rubro) if _rubro else ''}*", ""]
+        _nact = 0
+        for _i, _p in enumerate(_provs, 1):
+            _disp = _p.get("disponible", True) is not False
+            if _disp:
+                _nact += 1
+            _ic = "✅" if _disp else "⏸️"
+            _lineas.append(f"{_i}. {_ic} {_p.get('nombre','')} ({_p.get('tipo','')})")
+        _lineas.append("")
+        _lineas.append(f"Activos: *{_nact}/{len(_provs)}*")
+        _lineas.append("")
+        _lineas.append("👉 *1 N* activar · *0 N* pausar (ej: 1 2)")
+        await enviar_mensaje(numero, "\n".join(_lineas))
+        return
+
+    # ── OPERADOR: 1 N (activar) / 0 N (pausar) segun el ultimo listado ───────
     _pop = texto.strip().split()
     if (OPERADOR_WA and numero == OPERADOR_WA and len(_pop) == 2
             and _pop[0] in ("1", "0") and _pop[1].isdigit()):
-        _nums = list(CONDUCTORES.keys())
+        _ctx = _op_ctx.get(numero, ("conductores", None))
         _idx = int(_pop[1]) - 1
+        _nuevo = (_pop[0] == "1")
+        if _ctx[0] == "proveedores":
+            _ids = _ctx[1] or []
+            if _idx < 0 or _idx >= len(_ids):
+                await enviar_mensaje(numero, "⚠️ Ese numero no esta en la lista. Escribe *PROVEEDORES* para verla.")
+                return
+            _reg = set_proveedor_disponible(_ids[_idx], _nuevo)
+            if not _reg:
+                await enviar_mensaje(numero, "⚠️ No pude actualizar ese proveedor.")
+                return
+            if _nuevo:
+                await enviar_mensaje(numero, f"✅ *{_reg.get('nombre','')}* ({_reg.get('tipo','')}) quedó *ACTIVO*. Ya recibirá solicitudes.")
+            else:
+                await enviar_mensaje(numero, f"⏸️ *{_reg.get('nombre','')}* ({_reg.get('tipo','')}) quedó *PAUSADO*.")
+            return
+        # contexto por defecto: conductores
+        _nums = list(CONDUCTORES.keys())
         if _idx < 0 or _idx >= len(_nums):
             await enviar_mensaje(numero, "⚠️ Ese numero no esta en la lista. Escribe *ESTADO* para verla.")
             return
         _tel = _nums[_idx]
         _inf = CONDUCTORES.get(_tel, {})
-        if _pop[0] == "1":
+        if _nuevo:
             conductores_estado[_tel] = True
             await actualizar_estado_conductor_sheets(_tel, "ACTIVO")
             await enviar_mensaje(numero, f"✅ *{_inf.get('nombre','')}* ({_inf.get('placa','')}) quedó *ACTIVO*. Ya recibirá servicios.")
