@@ -5625,40 +5625,10 @@ async def procesar(numero: str, tipo: str, contenido: dict):
         await enviar_mensaje(numero, "\n".join(_lineas))
         return
 
-    # ── OPERADOR: PROVEEDORES [rubro] → lista numerada con su disponibilidad ──
+    # ── OPERADOR: PROVEEDORES → menu de rubros con botones/lista ─────────────
     if (OPERADOR_WA and numero == OPERADOR_WA
-            and texto.strip().split()[0:1] == ["PROVEEDORES"] and texto.strip().upper() != "CONDUCTORES"):
-        _partes = texto.strip().split(maxsplit=1)
-        _rubro = _partes[1].strip().lower() if len(_partes) > 1 else ""
-        _provs = []
-        try:
-            if os.path.exists(PROVEEDORES_FILE):
-                with open(PROVEEDORES_FILE, "r", encoding="utf-8") as _f:
-                    for _r in (json.load(_f) or []):
-                        if _r.get("estado") != "APROBADO":
-                            continue
-                        if _rubro and _rubro not in str(_r.get("tipo", "")).lower():
-                            continue
-                        _provs.append(_r)
-        except Exception:
-            pass
-        if not _provs:
-            await enviar_mensaje(numero, f"No hay proveedores aprobados{(' de ' + _rubro) if _rubro else ''}." + "\nUsa: *PROVEEDORES* o *PROVEEDORES <rubro>* (ej: PROVEEDORES tecnicos)")
-            return
-        _op_ctx[numero] = ("proveedores", [str(_p.get("id", "")) for _p in _provs])
-        _lineas = [f"🧰 *Proveedores{(' · ' + _rubro) if _rubro else ''}*", ""]
-        _nact = 0
-        for _i, _p in enumerate(_provs, 1):
-            _disp = _p.get("disponible", True) is not False
-            if _disp:
-                _nact += 1
-            _ic = "✅" if _disp else "⏸️"
-            _lineas.append(f"{_i}. {_ic} {_p.get('nombre','')} ({_p.get('tipo','')})")
-        _lineas.append("")
-        _lineas.append(f"Activos: *{_nact}/{len(_provs)}*")
-        _lineas.append("")
-        _lineas.append("👉 *1 N* activar · *0 N* pausar (ej: 1 2)")
-        await enviar_mensaje(numero, "\n".join(_lineas))
+            and texto.strip().upper() == "PROVEEDORES"):
+        await enviar_lista_rubros(numero)
         return
 
     # ── OPERADOR: 1 N (activar) / 0 N (pausar) segun el ultimo listado ───────
@@ -8093,6 +8063,92 @@ async def enviar_botones(to: str, texto: str, botones: list):
         return False
 
 
+async def enviar_lista(to: str, body: str, boton: str, filas: list, header: str = ""):
+    """Envia una lista interactiva (hasta 10 filas). filas = [(id, titulo, descripcion), ...]."""
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    rows = []
+    for _id, _tit, _desc in filas[:10]:
+        row = {"id": str(_id)[:200], "title": str(_tit)[:24]}
+        if _desc:
+            row["description"] = str(_desc)[:72]
+        rows.append(row)
+    interactive = {
+        "type": "list",
+        "body": {"text": body[:1024]},
+        "action": {"button": str(boton)[:20], "sections": [{"title": "Opciones", "rows": rows}]}
+    }
+    if header:
+        interactive["header"] = {"type": "text", "text": str(header)[:60]}
+    payload = {"messaging_product": "whatsapp", "to": to, "type": "interactive", "interactive": interactive}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(url, headers=headers, json=payload)
+        if r.status_code >= 400:
+            print(f"[LISTA ERROR] status={r.status_code} {r.text[:300]}", flush=True)
+            return False
+        print(f"[LISTA] enviada to={to} status={r.status_code}", flush=True)
+        return True
+    except Exception as e:
+        print(f"[LISTA ERROR] {e}", flush=True)
+        return False
+
+
+def _provs_aprobados_raw(rubro=None):
+    """Lee proveedores APROBADOS (opcional exacto por rubro/tipo)."""
+    out = []
+    try:
+        if os.path.exists(PROVEEDORES_FILE):
+            with open(PROVEEDORES_FILE, "r", encoding="utf-8") as f:
+                for r in (json.load(f) or []):
+                    if r.get("estado") != "APROBADO":
+                        continue
+                    if rubro and str(r.get("tipo", "")).strip().lower() != str(rubro).strip().lower():
+                        continue
+                    out.append(r)
+    except Exception as e:
+        print(f"[PROVEEDOR ERROR] leer: {e}", flush=True)
+    return out
+
+
+async def enviar_lista_rubros(numero: str):
+    """Muestra los rubros de proveedores como lista interactiva."""
+    provs = _provs_aprobados_raw()
+    if not provs:
+        await enviar_mensaje(numero, "No hay proveedores aprobados todavia.")
+        return
+    conteo = {}
+    for p in provs:
+        t = str(p.get("tipo", "")).strip() or "Otros"
+        conteo.setdefault(t, [0, 0])
+        conteo[t][1] += 1
+        if p.get("disponible", True) is not False:
+            conteo[t][0] += 1
+    filas = []
+    for t, (act, tot) in sorted(conteo.items(), key=lambda x: -x[1][1]):
+        filas.append((f"pr_rubro:{t}", t[:24], f"{act}/{tot} activos"))
+    await enviar_lista(numero, "🧰 *Proveedores* — elige un rubro para gestionar:", "Elegir rubro", filas[:10], header="Proveedores")
+
+
+async def enviar_lista_proveedores_rubro(numero: str, rubro: str):
+    """Muestra los proveedores de un rubro; tocar una fila activa/pausa."""
+    provs = _provs_aprobados_raw(rubro)
+    if not provs:
+        await enviar_mensaje(numero, f"No hay proveedores aprobados en *{rubro}*.")
+        return
+    filas = []
+    act = 0
+    for p in provs[:10]:
+        disp = p.get("disponible", True) is not False
+        if disp:
+            act += 1
+        ic = "✅" if disp else "⏸️"
+        nom = str(p.get("nombre", "")).strip()
+        accion = "pausar" if disp else "activar"
+        filas.append((f"pr_tog:{p.get('id','')}|{rubro}", f"{ic} {nom}"[:24], f"Tocar para {accion}"))
+    await enviar_lista(numero, f"🧰 *{rubro}*\nActivos: {act}/{len(provs)}\n\nToca un proveedor para activar/pausar.", "Ver proveedores", filas, header=str(rubro)[:60])
+
+
 async def procesar_interactive(numero: str, bid: str):
     """Maneja el id del boton/lista que el usuario toco."""
     bid = (bid or "").strip()
@@ -8103,7 +8159,31 @@ async def procesar_interactive(numero: str, bid: str):
         cual = "A" if bid == "test_a" else "B"
         await enviar_mensaje(numero, f"🎉 ¡Funciona! Tocaste el *Boton {cual}*.\n\nLos botones interactivos SI estan habilitados en tu cuenta. 🚀")
         return
-    # (futuro: aqui manejaremos los toggles de proveedores/conductores)
+    # --- Solo el operador gestiona proveedores ---
+    if OPERADOR_WA and numero == OPERADOR_WA:
+        if bid.startswith("pr_rubro:"):
+            rubro = bid.split(":", 1)[1]
+            await enviar_lista_proveedores_rubro(numero, rubro)
+            return
+        if bid.startswith("pr_tog:"):
+            resto = bid.split(":", 1)[1]
+            pid, _, rubro = resto.partition("|")
+            actual = None
+            for p in _provs_aprobados_raw():
+                if str(p.get("id")) == str(pid):
+                    actual = p.get("disponible", True) is not False
+                    if not rubro:
+                        rubro = str(p.get("tipo", ""))
+                    break
+            nuevo = (not actual) if actual is not None else True
+            reg = set_proveedor_disponible(pid, nuevo)
+            if reg:
+                estado = "ACTIVO ✅" if nuevo else "PAUSADO ⏸️"
+                await enviar_mensaje(numero, f"*{reg.get('nombre','')}* quedo *{estado}*.")
+                await enviar_lista_proveedores_rubro(numero, rubro or str(reg.get("tipo", "")))
+            else:
+                await enviar_mensaje(numero, "No pude actualizar ese proveedor.")
+            return
     await enviar_mensaje(numero, "Recibi tu seleccion.")
 
 
