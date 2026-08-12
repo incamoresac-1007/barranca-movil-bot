@@ -8125,6 +8125,22 @@ async def enviar_lista_rubros(numero: str):
         if p.get("disponible", True) is not False:
             conteo[t][0] += 1
     filas = []
+    # Transporte (conductores) primero, siempre presente
+    try:
+        _tot_c = len(CONDUCTORES)
+        _act_c = 0
+        _acts = await obtener_conductores_activos_desde_sheets()
+        _tset = set()
+        for _c in _acts:
+            _t = str(_c.get("telefono", "")).strip().replace("+", "")
+            if _t and not _t.startswith("51"):
+                _t = "51" + _t
+            if _t:
+                _tset.add(_t)
+        _act_c = sum(1 for _n in CONDUCTORES if _n in _tset)
+        filas.append(("pr_rubro:__TRANSPORTE__", "🚗 Transporte", f"{_act_c}/{_tot_c} activos"))
+    except Exception:
+        filas.append(("pr_rubro:__TRANSPORTE__", "🚗 Transporte", "conductores"))
     for t, (act, tot) in sorted(conteo.items(), key=lambda x: -x[1][1]):
         filas.append((f"pr_rubro:{t}", t[:24], f"{act}/{tot} activos"))
     await enviar_lista(numero, "🧰 *Proveedores* — elige un rubro para gestionar:", "Elegir rubro", filas[:10], header="Proveedores")
@@ -8149,6 +8165,31 @@ async def enviar_lista_proveedores_rubro(numero: str, rubro: str):
     await enviar_lista(numero, f"🧰 *{rubro}*\nActivos: {act}/{len(provs)}\n\nToca un proveedor para activar/pausar.", "Ver proveedores", filas, header=str(rubro)[:60])
 
 
+async def enviar_lista_conductores(numero: str):
+    """Muestra los conductores (Transporte) con su estado; tocar una fila activa/pausa."""
+    _tset = set()
+    try:
+        for _c in (await obtener_conductores_activos_desde_sheets()):
+            _t = str(_c.get("telefono", "")).strip().replace("+", "")
+            if _t and not _t.startswith("51"):
+                _t = "51" + _t
+            if _t:
+                _tset.add(_t)
+    except Exception:
+        pass
+    filas = []
+    act = 0
+    for _num, _info in list(CONDUCTORES.items())[:10]:
+        disp = _num in _tset
+        if disp:
+            act += 1
+        ic = "✅" if disp else "⏸️"
+        nom = str(_info.get("nombre", "")).strip()
+        accion = "pausar" if disp else "activar"
+        filas.append((f"c_tog:{_num}", f"{ic} {nom}"[:24], f"Tocar para {accion}"))
+    await enviar_lista(numero, f"🚗 *Transporte (conductores)*\nActivos: {act}/{len(CONDUCTORES)}\n\nToca un conductor para activar/pausar.", "Ver conductores", filas, header="Transporte")
+
+
 async def procesar_interactive(numero: str, bid: str):
     """Maneja el id del boton/lista que el usuario toco."""
     bid = (bid or "").strip()
@@ -8161,9 +8202,33 @@ async def procesar_interactive(numero: str, bid: str):
         return
     # --- Solo el operador gestiona proveedores ---
     if OPERADOR_WA and numero == OPERADOR_WA:
+        if bid == "pr_rubro:__TRANSPORTE__":
+            await enviar_lista_conductores(numero)
+            return
         if bid.startswith("pr_rubro:"):
             rubro = bid.split(":", 1)[1]
             await enviar_lista_proveedores_rubro(numero, rubro)
+            return
+        if bid.startswith("c_tog:"):
+            _cnum = bid.split(":", 1)[1]
+            _tset = set()
+            try:
+                for _c in (await obtener_conductores_activos_desde_sheets()):
+                    _t = str(_c.get("telefono", "")).strip().replace("+", "")
+                    if _t and not _t.startswith("51"):
+                        _t = "51" + _t
+                    if _t:
+                        _tset.add(_t)
+            except Exception:
+                pass
+            _era_activo = _cnum in _tset
+            _nuevo = not _era_activo
+            conductores_estado[_cnum] = _nuevo
+            await actualizar_estado_conductor_sheets(_cnum, "ACTIVO" if _nuevo else "PAUSADO")
+            _inf = CONDUCTORES.get(_cnum, {})
+            _est = "ACTIVO ✅" if _nuevo else "PAUSADO ⏸️"
+            await enviar_mensaje(numero, f"*{_inf.get('nombre','')}* ({_inf.get('placa','')}) quedo *{_est}*.")
+            await enviar_lista_conductores(numero)
             return
         if bid.startswith("pr_tog:"):
             resto = bid.split(":", 1)[1]
