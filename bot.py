@@ -3038,6 +3038,7 @@ VIDEOS_TURISMO = {
 _cache_activos = []          # último resultado bueno leído de Sheets
 _cache_activos_ts = 0.0      # marca de tiempo del último resultado bueno
 _op_ctx = {}                 # contexto del operador para 1 N / 0 N: ("conductores"|"proveedores", [ids])
+_roster_ts = 0.0             # última vez que se refrescó el roster de conductores (epoch)
 
 async def obtener_conductores_activos_desde_sheets():
     """
@@ -3090,9 +3091,13 @@ async def obtener_conductores_activos_desde_sheets():
     return _cache_activos
 
 
-async def refrescar_roster_conductores():
+async def refrescar_roster_conductores(forzar: bool = False, ttl: int = 120):
     """Trae TODOS los conductores desde la hoja CONDUCTORES y los suma/actualiza en el dict
-    CONDUCTORES. NUNCA borra los base; si Sheets falla, deja el dict intacto (el taxi no se rompe)."""
+    CONDUCTORES. Usa caché: solo relee del Sheet si pasaron mas de `ttl` seg (o si forzar=True).
+    NUNCA borra los base; si Sheets falla, deja el dict intacto (el taxi no se rompe)."""
+    global _roster_ts
+    if not forzar and (time.time() - _roster_ts) < ttl:
+        return  # roster fresco en memoria, no re-consultamos el Sheet
     webhook_url = os.getenv("SHEETS_WEBHOOK_URL", "")
     if not webhook_url:
         return
@@ -3120,6 +3125,7 @@ async def refrescar_roster_conductores():
                 "nombre": nom or CONDUCTORES.get(tel, {}).get("nombre", ""),
                 "placa": pla or CONDUCTORES.get(tel, {}).get("placa", ""),
             }
+        _roster_ts = time.time()
         if nuevos:
             print(f"[ROSTER] {nuevos} conductor(es) nuevo(s) desde Sheets. Total={len(CONDUCTORES)}", flush=True)
     except Exception as e:
@@ -3130,7 +3136,7 @@ async def loop_roster_conductores():
     """Refresca el roster de conductores desde Sheets cada 5 minutos."""
     await asyncio.sleep(10)
     while True:
-        await refrescar_roster_conductores()
+        await refrescar_roster_conductores(forzar=True)
         await asyncio.sleep(300)
 
 
