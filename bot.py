@@ -3039,6 +3039,8 @@ _cache_activos = []          # último resultado bueno leído de Sheets
 _cache_activos_ts = 0.0      # marca de tiempo del último resultado bueno
 _op_ctx = {}                 # contexto del operador para 1 N / 0 N: ("conductores"|"proveedores", [ids])
 _roster_ts = 0.0             # última vez que se refrescó el roster de conductores (epoch)
+_cache_actset = set()        # caché del set de conductores activos (rápido)
+_cache_actset_ts = 0.0
 
 async def obtener_conductores_activos_desde_sheets():
     """
@@ -8390,7 +8392,10 @@ async def enviar_lista_del_rubro(numero: str, rubro: str):
     await enviar_lista(numero, f"🗑 *Eliminar en {rubro}*\nToca el proveedor que quieres eliminar.", "Ver proveedores", filas, header=str(rubro)[:60])
 
 
-async def _conductores_activos_set():
+async def _conductores_activos_set(ttl: int = 25, forzar: bool = False):
+    global _cache_actset, _cache_actset_ts
+    if not forzar and (time.time() - _cache_actset_ts) < ttl:
+        return set(_cache_actset)
     _tset = set()
     try:
         for _c in (await obtener_conductores_activos_desde_sheets()):
@@ -8401,7 +8406,9 @@ async def _conductores_activos_set():
                 _tset.add(_t)
     except Exception:
         pass
-    return _tset
+    _cache_actset = set(_tset)
+    _cache_actset_ts = time.time()
+    return set(_tset)
 
 
 async def enviar_menu_gestion_rubros(numero: str):
@@ -8431,7 +8438,7 @@ async def enviar_gestion_conductores(numero: str):
     filas = []
     for _num, _info in list(CONDUCTORES.items())[:10]:
         ic = "✅" if _num in _set else "⏸️"
-        filas.append((f"g_open:c:{_num}", f"{ic} {_info.get('nombre','')}"[:24], "Tocar para ver opciones"))
+        filas.append((f"g_tog:c:{_num}", f"{ic} {_info.get('nombre','')}"[:24], "Tocar para " + ("pausar" if _num in _set else "activar")))
     await enviar_lista(numero, "🚗 *Transporte* — elige un conductor:", "Ver conductores", filas, header="Transporte")
 
 
@@ -8440,7 +8447,7 @@ async def enviar_gestion_proveedores(numero: str, rubro: str):
     filas = []
     for p in provs[:10]:
         ic = "✅" if p.get("disponible", True) is not False else "⏸️"
-        filas.append((f"g_open:p:{p.get('id','')}:{rubro}", f"{ic} {p.get('nombre','')}"[:24], "Tocar para ver opciones"))
+        filas.append((f"g_tog:p:{p.get('id','')}:{rubro}", f"{ic} {p.get('nombre','')}"[:24], "Tocar para " + ("pausar" if p.get('disponible', True) is not False else "activar")))
     await enviar_lista(numero, f"🧰 *{rubro}* — elige un proveedor:", "Ver proveedores", filas, header=str(rubro)[:60])
 
 
@@ -8501,7 +8508,13 @@ async def procesar_interactive(numero: str, bid: str):
             _nuevo = _tel not in _set
             conductores_estado[_tel] = _nuevo
             await actualizar_estado_conductor_sheets(_tel, "ACTIVO" if _nuevo else "PAUSADO")
-            await enviar_card_conductor(numero, _tel)
+            if _nuevo:
+                _cache_actset.add(_tel)
+            else:
+                _cache_actset.discard(_tel)
+            _inf = CONDUCTORES.get(_tel, {})
+            await enviar_mensaje(numero, f"{'✅' if _nuevo else '⏸️'} *{_inf.get('nombre','')}* → {'ACTIVO' if _nuevo else 'PAUSADO'}")
+            await enviar_gestion_conductores(numero)
             return
         if bid.startswith("g_tog:p:"):
             _r = bid[len("g_tog:p:"):]
@@ -8512,8 +8525,10 @@ async def procesar_interactive(numero: str, bid: str):
                     _reg = _p
                     break
             _nuevo = (not (_reg.get("disponible", True) is not False)) if _reg else True
-            set_proveedor_disponible(_pid, _nuevo)
-            await enviar_card_proveedor(numero, _pid, _rub)
+            _reg2 = set_proveedor_disponible(_pid, _nuevo)
+            _nom = _reg2.get("nombre", "") if _reg2 else ""
+            await enviar_mensaje(numero, f"{'✅' if _nuevo else '⏸️'} *{_nom}* → {'ACTIVO' if _nuevo else 'PAUSADO'}")
+            await enviar_gestion_proveedores(numero, _rub)
             return
         if bid.startswith("g_del:c:"):
             _tel = bid.split(":", 2)[2]
