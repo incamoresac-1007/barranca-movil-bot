@@ -3727,6 +3727,79 @@ def set_proveedor_disponible(pid: str, disponible: bool):
         return None
 
 
+def eliminar_proveedor(pid: str):
+    """Elimina un proveedor por id de proveedores.json (respalda antes). Devuelve el registro o None."""
+    try:
+        if not os.path.exists(PROVEEDORES_FILE):
+            return None
+        with open(PROVEEDORES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f) or []
+        elim = None
+        resto = []
+        for r in data:
+            if elim is None and str(r.get("id")) == str(pid):
+                elim = r
+            else:
+                resto.append(r)
+        if elim is None:
+            return None
+        try:
+            with open(PROVEEDORES_FILE + ".bak", "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        tmp = PROVEEDORES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(resto, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, PROVEEDORES_FILE)
+        print(f"[PROVEEDOR] eliminado {pid}", flush=True)
+        return elim
+    except Exception as e:
+        print(f"[PROVEEDOR ERROR] eliminar: {e}", flush=True)
+        return None
+
+
+async def migrar_transporte_a_conductores():
+    """Mueve proveedores Taxista/Colectivero a la hoja CONDUCTORES y los saca de proveedores.json."""
+    movidos = []
+    try:
+        if not os.path.exists(PROVEEDORES_FILE):
+            return movidos
+        with open(PROVEEDORES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f) or []
+        quedan = []
+        for r in data:
+            t = str(r.get("tipo", "")).strip().lower()
+            if t in ("taxista", "colectivero"):
+                tel = str(r.get("telefono", "")).strip().replace("+", "")
+                tel51 = tel if tel.startswith("51") else ("51" + tel)
+                telsin = tel51[2:] if tel51.startswith("51") else tel51
+                nombre = str(r.get("nombre", "")).strip()
+                placa = str(r.get("placa", "")).strip() or "S/P"
+                try:
+                    await sheets_evento("update_conductor", {"TELEFONO": telsin, "CONDUCTOR": nombre, "PLACA": placa, "ESTADO": "ACTIVO"})
+                except Exception as e:
+                    print(f"[MIGRAR ERROR] sheets {nombre}: {e}", flush=True)
+                CONDUCTORES[tel51] = {"nombre": nombre, "placa": placa}
+                movidos.append(nombre or telsin)
+            else:
+                quedan.append(r)
+        if movidos:
+            try:
+                with open(PROVEEDORES_FILE + ".bak", "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            tmp = PROVEEDORES_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(quedan, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, PROVEEDORES_FILE)
+            print(f"[MIGRAR] {len(movidos)} transportistas movidos a CONDUCTORES", flush=True)
+    except Exception as e:
+        print(f"[MIGRAR ERROR] {e}", flush=True)
+    return movidos
+
+
 async def _proveedor_a_sheets(reg: dict):
     """Espeja un proveedor a la pestaña PROVEEDORES del Google Sheet (upsert por ID_PROVEEDOR)."""
     try:
@@ -4154,8 +4227,19 @@ async def _unete_finalizar(numero: str, sesion: dict):
         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "estado": "PENDIENTE_VALIDACION",
     }
-    guardar_proveedor(registro)
-    await _proveedor_a_sheets(registro)
+    _es_transporte = str(registro.get("tipo", "")).strip().lower() in ("taxista", "colectivero")
+    if _es_transporte:
+        _tel = numero.replace("+", "")
+        _telsin = _tel[2:] if _tel.startswith("51") else _tel
+        _tel51 = _tel if _tel.startswith("51") else ("51" + _tel)
+        try:
+            await sheets_evento("update_conductor", {"TELEFONO": _telsin, "CONDUCTOR": registro.get("nombre", ""), "PLACA": registro.get("placa", "") or "S/P", "ESTADO": "ACTIVO"})
+        except Exception as e:
+            print(f"[UNETE->CONDUCTOR ERROR] {e}", flush=True)
+        CONDUCTORES[_tel51] = {"nombre": registro.get("nombre", ""), "placa": registro.get("placa", "") or "S/P"}
+    else:
+        guardar_proveedor(registro)
+        await _proveedor_a_sheets(registro)
 
     # Aviso al admin (si hay número configurado en Render)
     admin = os.getenv("ADMIN_WHATSAPP", "").strip()
@@ -5629,6 +5713,18 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 f"• *FIN* — marcar viaje terminado\n"
                 f"• *PAUSAR* / *ACTIVAR* — cambiar disponibilidad")
             return
+
+    if OPERADOR_WA and numero == OPERADOR_WA and texto.strip().upper() == "ELIMINAR":
+        await enviar_lista_rubros_del(numero)
+        return
+
+    if OPERADOR_WA and numero == OPERADOR_WA and texto.strip().upper() == "MIGRAR":
+        _mov = await migrar_transporte_a_conductores()
+        if _mov:
+            await enviar_mensaje(numero, "✅ Movidos a *Transporte* (CONDUCTORES):\n• " + "\n• ".join(_mov) + "\n\nYa no aparecen en Colectivero.")
+        else:
+            await enviar_mensaje(numero, "No habia transportistas en proveedores para mover.")
+        return
 
     if OPERADOR_WA and numero == OPERADOR_WA and texto.strip().upper() == "PRUEBABOTON":
         await enviar_botones(numero, "Prueba de botones interactivos. Toca uno:", [("test_a", "✅ Boton A"), ("test_b", "⏸️ Boton B")])
@@ -8242,6 +8338,50 @@ async def enviar_lista_conductores(numero: str):
     await enviar_lista(numero, f"🚗 *Transporte (conductores)*\nActivos: {act}/{len(CONDUCTORES)}\n\nToca un conductor para activar/pausar.", "Ver conductores", filas, header="Transporte")
 
 
+def _provs_todos_raw(rubro=None):
+    """Lee TODOS los proveedores (cualquier estado), opcional por rubro."""
+    out = []
+    try:
+        if os.path.exists(PROVEEDORES_FILE):
+            with open(PROVEEDORES_FILE, "r", encoding="utf-8") as f:
+                for r in (json.load(f) or []):
+                    if rubro and str(r.get("tipo", "")).strip().lower() != str(rubro).strip().lower():
+                        continue
+                    out.append(r)
+    except Exception as e:
+        print(f"[PROVEEDOR ERROR] leer todos: {e}", flush=True)
+    return out
+
+
+async def enviar_lista_rubros_del(numero: str):
+    """Rubros para ELIMINAR proveedores."""
+    provs = _provs_todos_raw()
+    if not provs:
+        await enviar_mensaje(numero, "No hay proveedores registrados.")
+        return
+    conteo = {}
+    for p in provs:
+        t = str(p.get("tipo", "")).strip() or "Otros"
+        conteo[t] = conteo.get(t, 0) + 1
+    filas = []
+    for t, n in sorted(conteo.items(), key=lambda x: -x[1]):
+        filas.append((f"pr_delrubro:{t}", t[:24], f"{n} registrado(s)"))
+    await enviar_lista(numero, "🗑 *Eliminar proveedor* — elige el rubro:", "Elegir rubro", filas[:10], header="Eliminar")
+
+
+async def enviar_lista_del_rubro(numero: str, rubro: str):
+    """Proveedores de un rubro para eliminar (tocar = pedir confirmacion)."""
+    provs = _provs_todos_raw(rubro)
+    if not provs:
+        await enviar_mensaje(numero, f"No hay proveedores en *{rubro}*.")
+        return
+    filas = []
+    for p in provs[:10]:
+        nom = str(p.get("nombre", "")).strip()
+        filas.append((f"pr_del:{p.get('id','')}|{rubro}", f"🗑 {nom}"[:24], "Tocar para eliminar"))
+    await enviar_lista(numero, f"🗑 *Eliminar en {rubro}*\nToca el proveedor que quieres eliminar.", "Ver proveedores", filas, header=str(rubro)[:60])
+
+
 async def procesar_interactive(numero: str, bid: str):
     """Maneja el id del boton/lista que el usuario toco."""
     bid = (bid or "").strip()
@@ -8254,6 +8394,31 @@ async def procesar_interactive(numero: str, bid: str):
         return
     # --- Solo el operador gestiona proveedores ---
     if OPERADOR_WA and numero == OPERADOR_WA:
+        if bid.startswith("pr_delrubro:"):
+            await enviar_lista_del_rubro(numero, bid.split(":", 1)[1])
+            return
+        if bid.startswith("pr_del:"):
+            _resto = bid.split(":", 1)[1]
+            _pid, _, _rubro = _resto.partition("|")
+            _reg = None
+            for _p in _provs_todos_raw():
+                if str(_p.get("id")) == str(_pid):
+                    _reg = _p
+                    break
+            _nom = _reg.get("nombre", "ese proveedor") if _reg else "ese proveedor"
+            await enviar_botones(numero, f"⚠️ ¿Eliminar a *{_nom}*? Esta accion no se puede deshacer.", [("pr_delok:" + _pid, "🗑 Si, eliminar"), ("pr_delno", "❌ Cancelar")])
+            return
+        if bid.startswith("pr_delok:"):
+            _pid = bid.split(":", 1)[1]
+            _reg = eliminar_proveedor(_pid)
+            if _reg:
+                await enviar_mensaje(numero, f"🗑 *{_reg.get('nombre','')}* fue eliminado.")
+            else:
+                await enviar_mensaje(numero, "No encontre ese proveedor (quiza ya fue eliminado).")
+            return
+        if bid == "pr_delno":
+            await enviar_mensaje(numero, "Cancelado. No se elimino nada.")
+            return
         if bid == "pr_rubro:__TRANSPORTE__":
             await enviar_lista_conductores(numero)
             return
