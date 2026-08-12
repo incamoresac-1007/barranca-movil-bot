@@ -5718,6 +5718,10 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 f"• *PAUSAR* / *ACTIVAR* — cambiar disponibilidad")
             return
 
+    if OPERADOR_WA and numero == OPERADOR_WA and texto.strip().upper() in ("GESTIONAR", "PANEL", "GESTION"):
+        await enviar_menu_gestion_rubros(numero)
+        return
+
     if OPERADOR_WA and numero == OPERADOR_WA and texto.strip().upper() == "ELIMINAR":
         await enviar_lista_rubros_del(numero)
         return
@@ -8386,6 +8390,84 @@ async def enviar_lista_del_rubro(numero: str, rubro: str):
     await enviar_lista(numero, f"🗑 *Eliminar en {rubro}*\nToca el proveedor que quieres eliminar.", "Ver proveedores", filas, header=str(rubro)[:60])
 
 
+async def _conductores_activos_set():
+    _tset = set()
+    try:
+        for _c in (await obtener_conductores_activos_desde_sheets()):
+            _t = str(_c.get("telefono", "")).strip().replace("+", "")
+            if _t and not _t.startswith("51"):
+                _t = "51" + _t
+            if _t:
+                _tset.add(_t)
+    except Exception:
+        pass
+    return _tset
+
+
+async def enviar_menu_gestion_rubros(numero: str):
+    provs = _provs_aprobados_raw()
+    filas = []
+    try:
+        _set = await _conductores_activos_set()
+        _act = sum(1 for _n in CONDUCTORES if _n in _set)
+        filas.append(("g_rubro:__TRANSPORTE__", "🚗 Transporte", f"{_act}/{len(CONDUCTORES)} activos"))
+    except Exception:
+        filas.append(("g_rubro:__TRANSPORTE__", "🚗 Transporte", "conductores"))
+    conteo = {}
+    for p in provs:
+        t = str(p.get("tipo", "")).strip() or "Otros"
+        conteo.setdefault(t, [0, 0])
+        conteo[t][1] += 1
+        if p.get("disponible", True) is not False:
+            conteo[t][0] += 1
+    for t, (a, n) in sorted(conteo.items(), key=lambda x: -x[1][1]):
+        filas.append((f"g_rubro:{t}", t[:24], f"{a}/{n} activos"))
+    await enviar_lista(numero, "🛠️ *Gestion* — elige un rubro:", "Elegir rubro", filas[:10], header="Gestionar")
+
+
+async def enviar_gestion_conductores(numero: str):
+    await refrescar_roster_conductores()
+    _set = await _conductores_activos_set()
+    filas = []
+    for _num, _info in list(CONDUCTORES.items())[:10]:
+        ic = "✅" if _num in _set else "⏸️"
+        filas.append((f"g_open:c:{_num}", f"{ic} {_info.get('nombre','')}"[:24], "Tocar para ver opciones"))
+    await enviar_lista(numero, "🚗 *Transporte* — elige un conductor:", "Ver conductores", filas, header="Transporte")
+
+
+async def enviar_gestion_proveedores(numero: str, rubro: str):
+    provs = _provs_todos_raw(rubro)
+    filas = []
+    for p in provs[:10]:
+        ic = "✅" if p.get("disponible", True) is not False else "⏸️"
+        filas.append((f"g_open:p:{p.get('id','')}:{rubro}", f"{ic} {p.get('nombre','')}"[:24], "Tocar para ver opciones"))
+    await enviar_lista(numero, f"🧰 *{rubro}* — elige un proveedor:", "Ver proveedores", filas, header=str(rubro)[:60])
+
+
+async def enviar_card_conductor(numero: str, tel: str):
+    _set = await _conductores_activos_set()
+    disp = tel in _set
+    info = CONDUCTORES.get(tel, {})
+    txt = f"🚗 *{info.get('nombre','')}* ({info.get('placa','')})\nEstado: {'ACTIVO ✅' if disp else 'PAUSADO ⏸️'}\n\n¿Que deseas hacer?"
+    tog = ("g_tog:c:" + tel, "⏸️ Pausar" if disp else "✅ Activar")
+    await enviar_botones(numero, txt, [tog, ("g_del:c:" + tel, "🗑️ Eliminar"), ("g_back:__TRANSPORTE__", "↩️ Volver")])
+
+
+async def enviar_card_proveedor(numero: str, pid: str, rubro: str):
+    reg = None
+    for p in _provs_todos_raw():
+        if str(p.get("id")) == str(pid):
+            reg = p
+            break
+    if not reg:
+        await enviar_mensaje(numero, "No encontre ese proveedor.")
+        return
+    disp = reg.get("disponible", True) is not False
+    txt = f"🧰 *{reg.get('nombre','')}* ({reg.get('tipo','')})\nEstado: {'ACTIVO ✅' if disp else 'PAUSADO ⏸️'}\n\n¿Que deseas hacer?"
+    tog = (f"g_tog:p:{pid}:{rubro}", "⏸️ Pausar" if disp else "✅ Activar")
+    await enviar_botones(numero, txt, [tog, (f"g_del:p:{pid}:{rubro}", "🗑️ Eliminar"), (f"g_back:{rubro}", "↩️ Volver")])
+
+
 async def procesar_interactive(numero: str, bid: str):
     """Maneja el id del boton/lista que el usuario toco."""
     bid = (bid or "").strip()
@@ -8398,6 +8480,79 @@ async def procesar_interactive(numero: str, bid: str):
         return
     # --- Solo el operador gestiona proveedores ---
     if OPERADOR_WA and numero == OPERADOR_WA:
+        # ===== PANEL UNIFICADO (GESTIONAR) =====
+        if bid == "g_rubro:__TRANSPORTE__" or bid == "g_back:__TRANSPORTE__":
+            await enviar_gestion_conductores(numero)
+            return
+        if bid.startswith("g_rubro:") or bid.startswith("g_back:"):
+            await enviar_gestion_proveedores(numero, bid.split(":", 1)[1])
+            return
+        if bid.startswith("g_open:c:"):
+            await enviar_card_conductor(numero, bid.split(":", 2)[2])
+            return
+        if bid.startswith("g_open:p:"):
+            _r = bid[len("g_open:p:"):]
+            _pid, _, _rub = _r.partition(":")
+            await enviar_card_proveedor(numero, _pid, _rub)
+            return
+        if bid.startswith("g_tog:c:"):
+            _tel = bid.split(":", 2)[2]
+            _set = await _conductores_activos_set()
+            _nuevo = _tel not in _set
+            conductores_estado[_tel] = _nuevo
+            await actualizar_estado_conductor_sheets(_tel, "ACTIVO" if _nuevo else "PAUSADO")
+            await enviar_card_conductor(numero, _tel)
+            return
+        if bid.startswith("g_tog:p:"):
+            _r = bid[len("g_tog:p:"):]
+            _pid, _, _rub = _r.partition(":")
+            _reg = None
+            for _p in _provs_todos_raw():
+                if str(_p.get("id")) == str(_pid):
+                    _reg = _p
+                    break
+            _nuevo = (not (_reg.get("disponible", True) is not False)) if _reg else True
+            set_proveedor_disponible(_pid, _nuevo)
+            await enviar_card_proveedor(numero, _pid, _rub)
+            return
+        if bid.startswith("g_del:c:"):
+            _tel = bid.split(":", 2)[2]
+            _info = CONDUCTORES.get(_tel, {})
+            await enviar_botones(numero, f"⚠️ ¿Eliminar al conductor *{_info.get('nombre','')}*? No se puede deshacer.", [("g_delok:c:" + _tel, "🗑️ Si, eliminar"), ("g_delno", "❌ Cancelar")])
+            return
+        if bid.startswith("g_del:p:"):
+            _r = bid[len("g_del:p:"):]
+            _pid, _, _rub = _r.partition(":")
+            _nom = "ese proveedor"
+            for _p in _provs_todos_raw():
+                if str(_p.get("id")) == str(_pid):
+                    _nom = _p.get("nombre", _nom)
+                    break
+            await enviar_botones(numero, f"⚠️ ¿Eliminar a *{_nom}*? No se puede deshacer.", [("g_delok:p:" + _pid, "🗑️ Si, eliminar"), ("g_delno", "❌ Cancelar")])
+            return
+        if bid.startswith("g_delok:c:"):
+            _tel = bid.split(":", 2)[2]
+            _info = CONDUCTORES.pop(_tel, {})
+            _telsin = _tel[2:] if _tel.startswith("51") else _tel
+            try:
+                await sheets_evento("delete_conductor", {"telefono": _telsin})
+            except Exception as e:
+                print(f"[DEL COND ERROR] {e}", flush=True)
+            await enviar_mensaje(numero, f"🗑️ Conductor *{_info.get('nombre','')}* eliminado.")
+            return
+        if bid.startswith("g_delok:p:"):
+            _pid = bid.split(":", 2)[2]
+            _reg = eliminar_proveedor(_pid)
+            try:
+                await sheets_evento("delete_proveedor", {"id": _pid})
+            except Exception as e:
+                print(f"[DEL PROV ERROR] {e}", flush=True)
+            _nom = _reg.get("nombre", "") if _reg else ""
+            await enviar_mensaje(numero, f"🗑️ *{_nom}* eliminado." if _nom else "Proveedor eliminado.")
+            return
+        if bid == "g_delno":
+            await enviar_mensaje(numero, "Cancelado. No se elimino nada.")
+            return
         if bid.startswith("pr_delrubro:"):
             await enviar_lista_del_rubro(numero, bid.split(":", 1)[1])
             return
