@@ -3781,6 +3781,10 @@ async def migrar_transporte_a_conductores():
                 except Exception as e:
                     print(f"[MIGRAR ERROR] sheets {nombre}: {e}", flush=True)
                 CONDUCTORES[tel51] = {"nombre": nombre, "placa": placa}
+                try:
+                    await sheets_evento("delete_proveedor", {"id": r.get("id", "")})
+                except Exception as e:
+                    print(f"[MIGRAR ERROR] delete sheet {nombre}: {e}", flush=True)
                 movidos.append(nombre or telsin)
             else:
                 quedan.append(r)
