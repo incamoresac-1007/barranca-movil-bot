@@ -103,6 +103,7 @@ async def startup():
     print("[BOT] Renovador de token DESACTIVADO - usando WHATSAPP_TOKEN de Render Environment", flush=True)
     print("[BOT] Limpiador de sesiones iniciado - cada 1h", flush=True)
     asyncio.create_task(programador_inicio_turno_conductores())
+    asyncio.create_task(loop_roster_conductores())
     print("[BOT] Programador inicio turno activo - 07:00 Lima / alerta 08:00 Lima", flush=True)
 
 # ── Navegación ───────────────────────────────────────────────────────────────
@@ -3087,6 +3088,50 @@ async def obtener_conductores_activos_desde_sheets():
     # Todos los intentos fallaron: usar ultimo estado bueno (no reportar 0 falso)
     print(f"[CONDUCTORES ERROR] Sheets no respondio ({_ultimo_err}); uso cache con {len(_cache_activos)} activos", flush=True)
     return _cache_activos
+
+
+async def refrescar_roster_conductores():
+    """Trae TODOS los conductores desde la hoja CONDUCTORES y los suma/actualiza en el dict
+    CONDUCTORES. NUNCA borra los base; si Sheets falla, deja el dict intacto (el taxi no se rompe)."""
+    webhook_url = os.getenv("SHEETS_WEBHOOK_URL", "")
+    if not webhook_url:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            r = await client.post(webhook_url, json={"action": "get_conductores"})
+        if r.status_code >= 400:
+            return
+        resp = r.json()
+        if not resp.get("ok"):
+            return
+        lista = resp.get("conductores", []) or []
+        nuevos = 0
+        for c in lista:
+            tel = str(c.get("telefono", "")).strip().replace("+", "")
+            if tel and not tel.startswith("51"):
+                tel = "51" + tel
+            if not tel:
+                continue
+            nom = str(c.get("nombre", "")).strip()
+            pla = str(c.get("placa", "")).strip()
+            if tel not in CONDUCTORES:
+                nuevos += 1
+            CONDUCTORES[tel] = {
+                "nombre": nom or CONDUCTORES.get(tel, {}).get("nombre", ""),
+                "placa": pla or CONDUCTORES.get(tel, {}).get("placa", ""),
+            }
+        if nuevos:
+            print(f"[ROSTER] {nuevos} conductor(es) nuevo(s) desde Sheets. Total={len(CONDUCTORES)}", flush=True)
+    except Exception as e:
+        print(f"[ROSTER ERROR] {e}", flush=True)
+
+
+async def loop_roster_conductores():
+    """Refresca el roster de conductores desde Sheets cada 5 minutos."""
+    await asyncio.sleep(10)
+    while True:
+        await refrescar_roster_conductores()
+        await asyncio.sleep(300)
 
 
 async def notificar_conductores(sesion: dict, numero_cliente: str, tipo: str = "TAXI"):
@@ -8167,6 +8212,7 @@ async def enviar_lista_proveedores_rubro(numero: str, rubro: str):
 
 async def enviar_lista_conductores(numero: str):
     """Muestra los conductores (Transporte) con su estado; tocar una fila activa/pausa."""
+    await refrescar_roster_conductores()
     _tset = set()
     try:
         for _c in (await obtener_conductores_activos_desde_sheets()):
