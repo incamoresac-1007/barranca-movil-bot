@@ -5579,6 +5579,10 @@ async def procesar(numero: str, tipo: str, contenido: dict):
                 f"• *PAUSAR* / *ACTIVAR* — cambiar disponibilidad")
             return
 
+    if OPERADOR_WA and numero == OPERADOR_WA and texto.strip().upper() == "PRUEBABOTON":
+        await enviar_botones(numero, "Prueba de botones interactivos. Toca uno:", [("test_a", "✅ Boton A"), ("test_b", "⏸️ Boton B")])
+        return
+
     if OPERADOR_WA and numero == OPERADOR_WA and texto.strip().upper() in ("ESTADO", "ACTIVOS", "CONDUCTORES"):
         _activos_tel = set()
         try:
@@ -8059,6 +8063,50 @@ async def verificar(request: Request):
         return PlainTextResponse(p.get("hub.challenge"))
     raise HTTPException(status_code=403)
 
+async def enviar_botones(to: str, texto: str, botones: list):
+    """Envia un mensaje interactivo con botones (max 3). botones = [(id, titulo), ...]."""
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    btns = []
+    for _id, _tit in botones[:3]:
+        btns.append({"type": "reply", "reply": {"id": str(_id)[:256], "title": str(_tit)[:20]}})
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": texto[:1024]},
+            "action": {"buttons": btns}
+        }
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(url, headers=headers, json=payload)
+        if r.status_code >= 400:
+            print(f"[BOTONES ERROR] status={r.status_code} {r.text[:300]}", flush=True)
+            return False
+        print(f"[BOTONES] enviado to={to} status={r.status_code}", flush=True)
+        return True
+    except Exception as e:
+        print(f"[BOTONES ERROR] {e}", flush=True)
+        return False
+
+
+async def procesar_interactive(numero: str, bid: str):
+    """Maneja el id del boton/lista que el usuario toco."""
+    bid = (bid or "").strip()
+    if not bid:
+        return
+    # --- PRUEBA de botones ---
+    if bid in ("test_a", "test_b"):
+        cual = "A" if bid == "test_a" else "B"
+        await enviar_mensaje(numero, f"🎉 ¡Funciona! Tocaste el *Boton {cual}*.\n\nLos botones interactivos SI estan habilitados en tu cuenta. 🚀")
+        return
+    # (futuro: aqui manejaremos los toggles de proveedores/conductores)
+    await enviar_mensaje(numero, "Recibi tu seleccion.")
+
+
 @app.post("/webhook")
 async def recibir(request: Request):
     try:
@@ -8098,6 +8146,16 @@ async def recibir(request: Request):
                 await procesar(numero, "image", msg.get("image", {}))
             elif tipo == "audio":
                 await procesar_audio(numero, msg.get("audio", {}))
+            elif tipo == "interactive":
+                _inter = msg.get("interactive", {})
+                _it = _inter.get("type")
+                if _it == "button_reply":
+                    _bid = _inter.get("button_reply", {}).get("id", "")
+                elif _it == "list_reply":
+                    _bid = _inter.get("list_reply", {}).get("id", "")
+                else:
+                    _bid = ""
+                await procesar_interactive(numero, _bid)
             else:
                 await enviar_mensaje(numero, "Solo entiendo texto, ubicaciones e imágenes 😊\n\nEscribe *menu* para comenzar.")
 
