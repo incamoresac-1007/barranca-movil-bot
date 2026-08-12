@@ -8504,16 +8504,14 @@ async def procesar_interactive(numero: str, bid: str):
             return
         if bid.startswith("g_tog:c:"):
             _tel = bid.split(":", 2)[2]
-            _set = await _conductores_activos_set()
-            _nuevo = _tel not in _set
+            _nuevo = _tel not in _cache_actset
             conductores_estado[_tel] = _nuevo
-            await actualizar_estado_conductor_sheets(_tel, "ACTIVO" if _nuevo else "PAUSADO")
             if _nuevo:
                 _cache_actset.add(_tel)
             else:
                 _cache_actset.discard(_tel)
-            _inf = CONDUCTORES.get(_tel, {})
-            await enviar_mensaje(numero, f"{'✅' if _nuevo else '⏸️'} *{_inf.get('nombre','')}* → {'ACTIVO' if _nuevo else 'PAUSADO'}")
+            # guardado en Google Sheet POR DETRAS (no bloquea la respuesta)
+            asyncio.create_task(actualizar_estado_conductor_sheets(_tel, "ACTIVO" if _nuevo else "PAUSADO"))
             await enviar_gestion_conductores(numero)
             return
         if bid.startswith("g_tog:p:"):
@@ -8525,9 +8523,7 @@ async def procesar_interactive(numero: str, bid: str):
                     _reg = _p
                     break
             _nuevo = (not (_reg.get("disponible", True) is not False)) if _reg else True
-            _reg2 = set_proveedor_disponible(_pid, _nuevo)
-            _nom = _reg2.get("nombre", "") if _reg2 else ""
-            await enviar_mensaje(numero, f"{'✅' if _nuevo else '⏸️'} *{_nom}* → {'ACTIVO' if _nuevo else 'PAUSADO'}")
+            set_proveedor_disponible(_pid, _nuevo)  # esto es local (rapido)
             await enviar_gestion_proveedores(numero, _rub)
             return
         if bid.startswith("g_del:c:"):
